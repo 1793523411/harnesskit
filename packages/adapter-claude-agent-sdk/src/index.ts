@@ -247,13 +247,3 @@ export const withHarnesskit = <T extends ClaudeAgentSdkOptions>(
     canUseTool: wrapCanUseTool(opts.bus, sdkOptions.canUseTool, fallbackSessionId),
   };
 };
-
-/**
- * @deprecated Use `withHarnesskit(bus, sdkOptions)` instead — it returns
- * instrumented options to pass to `query()`.
- */
-export function attachClaudeAgentSdkAdapter(_opts: { bus: EventBus }): () => void {
-  throw new Error(
-    'attachClaudeAgentSdkAdapter is deprecated. Use withHarnesskit(bus, sdkOptions) instead.',
-  );
-}

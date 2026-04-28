@@ -6,9 +6,10 @@
   "type": "module",
   "scripts": {
     "quickstart": "tsx src/quickstart.ts",
+    "openai-quickstart": "tsx src/openai-quickstart.ts",
     "policy-and-eval": "tsx src/policy-and-eval.ts",
     "replay-eval": "tsx src/replay-eval.ts",
-    "all": "pnpm quickstart && pnpm policy-and-eval && pnpm replay-eval",
+    "all": "pnpm quickstart && pnpm openai-quickstart && pnpm policy-and-eval && pnpm replay-eval",
     "typecheck": "tsc --noEmit",
     "build": "echo 'examples are run with tsx, no build needed'",
     "test": "vitest run --passWithNoTests",
