@@ -1,0 +1,26 @@
+{
+  "name": "@harnesskit/examples",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Runnable demonstrations of the harnesskit SDK",
+  "type": "module",
+  "scripts": {
+    "quickstart": "tsx src/quickstart.ts",
+    "policy-and-eval": "tsx src/policy-and-eval.ts",
+    "replay-eval": "tsx src/replay-eval.ts",
+    "all": "pnpm quickstart && pnpm policy-and-eval && pnpm replay-eval",
+    "typecheck": "tsc --noEmit",
+    "build": "echo 'examples are run with tsx, no build needed'",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@harnesskit/core": "workspace:*",
+    "@harnesskit/policy": "workspace:*",
+    "@harnesskit/eval": "workspace:*",
+    "@harnesskit/provider-fetch": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  }
+}

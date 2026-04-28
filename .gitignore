@@ -1,0 +1,13 @@
+node_modules
+dist
+.turbo
+*.tsbuildinfo
+.DS_Store
+coverage
+*.log
+.env
+.env.local
+
+# Local Claude Code / OMC artifacts (user-specific, not part of the SDK)
+.claude
+.omc
