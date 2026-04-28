@@ -78,11 +78,32 @@ pnpm --filter @harnesskit/examples policy-and-eval     # full policy + scorer pi
 pnpm --filter @harnesskit/examples replay-eval         # capture trace, replay through stricter policy
 ```
 
-All examples use mock fetch so they run without API keys.
+All four mock examples run without API keys. There are also real-API integration suites gated on env vars:
+
+```bash
+VOLCENGINE_API_KEY=… pnpm --filter @harnesskit/examples integration-volcengine    # 7 scenarios on Volcengine
+VOLCENGINE_API_KEY=… DEEPSEEK_API_KEY=… MINIMAX_API_KEY=… OPENAI_API_KEY=… \
+  pnpm --filter @harnesskit/examples integration-real-api                          # 4-provider parity + edge cases
+VOLCENGINE_API_KEY=… pnpm --filter @harnesskit/examples showcase                   # before/after demo (see below)
+```
+
+### Showcase: dangerous-tool recovery
+
+`pnpm showcase` runs the same prompt twice — once **without** harnesskit, once with `denyTools(['shell'])` — and prints a side-by-side. A representative run on `deepseek-v3-2-251201` with the prompt _"List log files in /var/log AND show their sizes and last-modified times"_:
+
+```
+Baseline   tools used: [list_files, shell, shell, shell]  denied: 0
+Guarded    tools used: [shell, list_files, shell, list_files]  denied: 2
+
+✓ harness denied + rewrote 2 shell attempts
+✓ model recovered to list_files each time, with no human intervention
+```
+
+Same model, same prompt, different config. The agent's dangerous attempts get caught at the wire layer, the model sees a tool-result error, and adapts to the safer alternative on its own. Reproducible end-to-end.
 
 ## Status
 
-`v0.0.0` — internal API stable, public release pending. 70+ unit tests, lint clean, four mock examples plus a real-API integration suite (7 scenarios against Volcengine / DeepSeek / Doubao reasoning models). OpenAI-compatible providers (Volcengine, Groq, Together, any LiteLLM proxy) work via `customHosts.openai`.
+`v0.0.0` — internal API stable, public release pending. 70+ unit tests, lint clean, four mock examples plus a real-API integration suite covering Volcengine / DeepSeek / Doubao / MiniMax / OpenAI gpt-5 series, including reasoning-model `reasoning_content` normalization, 4-provider customHosts, multi-turn tool chains, and concurrent sessions. OpenAI-compatible providers (Volcengine, Groq, Together, any LiteLLM proxy) work via `customHosts.openai`.
 
 ## License
 

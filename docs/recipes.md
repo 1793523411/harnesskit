@@ -2,6 +2,43 @@
 
 Copy-paste patterns for common needs.
 
+## Self-recovering agent via deny rewrite
+
+The "tell the model what NOT to do" pattern, end-to-end. No human in the loop.
+
+```ts
+import { EventBus } from '@harnesskit/core';
+import { denyTools, policyToInterceptor } from '@harnesskit/policy';
+import { installFetchInterceptor } from '@harnesskit/provider-fetch';
+
+const bus = new EventBus();
+bus.use(policyToInterceptor(denyTools(['shell', 'exec_*'])));
+installFetchInterceptor({ bus });
+
+// Now run any agent loop. When the model tries `shell`:
+//   1. Bus emits `tool.call.requested`
+//   2. Policy denies
+//   3. Bus emits `tool.call.denied`
+//   4. Host SDK still asks the model to "execute" the tool (it can't actually,
+//      because the host either can't run shell or runs whatever the model said —
+//      doesn't matter for the harness)
+//   5. On the NEXT outgoing request, harnesskit rewrites the tool_result for
+//      that tool_use_id to `[harnesskit denied] tool "shell" is denied` with
+//      `is_error: true`
+//   6. The model sees the error, apologizes, picks a different tool
+```
+
+Real-world reproduction: see [`examples/src/showcase-deny-recovery.ts`](../examples/src/showcase-deny-recovery.ts). On a real DeepSeek-v3 run with the prompt _"List log files in /var/log AND show their sizes and last-modified times"_:
+
+```
+Baseline   tools used: [list_files, shell, shell, shell]  denied: 0
+Guarded    tools used: [shell, list_files, shell, list_files]  denied: 2
+```
+
+The guarded run shows two shell attempts, both denied, both followed by a successful `list_files` retry — agent self-recovered each time.
+
+This is the cleanest demonstration of harnesskit's value: same code, same model, dramatically different behavior, no agent loop modification required.
+
 ## Audit log to file
 
 Stream every event to a JSONL file as it happens:

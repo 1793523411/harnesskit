@@ -10,6 +10,8 @@
     "policy-and-eval": "tsx src/policy-and-eval.ts",
     "replay-eval": "tsx src/replay-eval.ts",
     "integration-volcengine": "tsx src/integration-volcengine.ts",
+    "integration-real-api": "tsx src/integration-real-api.ts",
+    "showcase": "tsx src/showcase-deny-recovery.ts",
     "all": "pnpm quickstart && pnpm openai-quickstart && pnpm policy-and-eval && pnpm replay-eval",
     "typecheck": "tsc --noEmit",
     "build": "echo 'examples are run with tsx, no build needed'",
