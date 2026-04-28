@@ -82,7 +82,7 @@ All examples use mock fetch so they run without API keys.
 
 ## Status
 
-`v0.0.0` — internal API stable, public release pending. 70+ tests, lint clean, four runnable examples covering both providers and trace replay.
+`v0.0.0` — internal API stable, public release pending. 70+ unit tests, lint clean, four mock examples plus a real-API integration suite (7 scenarios against Volcengine / DeepSeek / Doubao reasoning models). OpenAI-compatible providers (Volcengine, Groq, Together, any LiteLLM proxy) work via `customHosts.openai`.
 
 ## License
 

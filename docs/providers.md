@@ -4,14 +4,16 @@
 
 ## Provider matrix
 
-| Provider tag | Endpoint match | Wire format | Streaming | Deny rewrite target |
-| --- | --- | --- | --- | --- |
-| `anthropic` | `api.anthropic.com/v1/messages` | Anthropic Messages | SSE with named events | `tool_result` block in user message |
-| `openai` | `api.openai.com/v1/chat/completions` | OpenAI Chat Completions | SSE data lines (+ `[DONE]`) | `role: 'tool'` message |
-| `openai-responses` | `api.openai.com/v1/responses` | OpenAI Responses API | SSE with named events (`response.*`) | `function_call_output` item |
-| `openrouter` | `openrouter.ai/api/v1/chat/completions` | OpenAI-compatible | Same as `openai` | Same as `openai` |
+| Provider tag | Default host | Path match | Wire format | Streaming | Deny rewrite target |
+| --- | --- | --- | --- | --- | --- |
+| `anthropic` | `api.anthropic.com` | `*/v1/messages` | Anthropic Messages | SSE with named events | `tool_result` block in user message |
+| `openai` | `api.openai.com` | `*/chat/completions` | OpenAI Chat Completions | SSE data lines (+ `[DONE]`) | `role: 'tool'` message |
+| `openai-responses` | `api.openai.com` | `*/v1/responses` | OpenAI Responses API | SSE with named events (`response.*`) | `function_call_output` item |
+| `openrouter` | `openrouter.ai` | `*/chat/completions` | OpenAI-compatible | Same as `openai` | Same as `openai` |
 
-All four are tested for both **non-streaming** and **streaming** paths, including deny-rewrite across requests.
+Path matching uses `endsWith` so proxy gateways with non-standard prefixes are handled (e.g. Volcengine's `/api/v3/chat/completions`, Groq's `/openai/v1/chat/completions`). Hosts are still matched strictly — pass `customHosts` to add proxies.
+
+All four are tested for both **non-streaming** and **streaming** paths, including deny-rewrite across requests, plus reasoning-model support (`reasoning_content` field — see below).
 
 ## Install + usage
 
@@ -78,21 +80,61 @@ When the bus denies a `tool.call.requested`, harnesskit stores `{tool_id → rea
 
 After rewriting, the entry is removed from the deny store — re-emission of the same `tool_use_id` (rare but possible) won't re-deny.
 
-## Custom hosts (proxies, gateways)
+## Custom hosts (proxies, gateways, alternative providers)
 
-Many teams run a proxy in front of the real API:
+Many teams run a proxy in front of the real API, or use OpenAI-compatible providers other than OpenAI itself. Add their host to `customHosts.<tag>`:
 
 ```ts
 installFetchInterceptor({
   bus,
   customHosts: {
     anthropic: ['llm-gateway.internal'],
-    openai: ['my-litellm.example.com'],
+    openai: [
+      'my-litellm.example.com',
+      'ark.cn-beijing.volces.com',  // Volcengine (Doubao, DeepSeek)
+      'api.groq.com',                // Groq
+      'api.together.xyz',            // Together
+    ],
   },
 });
 ```
 
-Now `https://llm-gateway.internal/v1/messages` is treated as Anthropic. Default hosts are still recognized.
+Now `https://llm-gateway.internal/v1/messages` is treated as Anthropic; `https://ark.cn-beijing.volces.com/api/v3/chat/completions` is treated as OpenAI Chat Completions. Default hosts are still recognized.
+
+### Verified OpenAI-compatible deployments
+
+The path matcher (`endsWith('/chat/completions')`) plus `customHosts.openai` covers:
+
+| Provider | Host | Notes |
+| --- | --- | --- |
+| Volcengine (火山引擎) | `ark.cn-beijing.volces.com` | DeepSeek, Doubao, Qwen — including reasoning models |
+| Groq | `api.groq.com` | path `/openai/v1/chat/completions` |
+| Together AI | `api.together.xyz` | |
+| Anyscale Endpoints | `api.endpoints.anyscale.com` | |
+| Any LiteLLM proxy | (your host) | |
+
+If your provider uses a different path entirely (e.g. Bedrock's `/model/.../invoke`), you'll need a new ProviderImpl — see "Adding a new provider" below.
+
+## Reasoning models (`reasoning_content`)
+
+DeepSeek, Doubao, Qwen-Reasoning and similar models return a separate `reasoning_content` field on the assistant message in addition to `content`. harnesskit normalizes this to a `thinking` block in the `NormalizedResponse`:
+
+```ts
+// turn.end event
+{
+  type: 'turn.end',
+  response: {
+    content: [
+      { type: 'thinking', text: 'Let me work through this step by step...' },
+      { type: 'text',     text: 'The answer is 4.' },
+    ],
+    stopReason: 'stop',
+  },
+  // ...
+}
+```
+
+Streaming `delta.reasoning_content` is reassembled across SSE chunks the same way `delta.content` is. No configuration needed — works automatically when the upstream model emits it.
 
 ## Header redaction
 

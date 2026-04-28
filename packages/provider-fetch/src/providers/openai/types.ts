@@ -22,6 +22,8 @@ export type OpenAIContentPart = OpenAITextPart | OpenAIImagePart;
 export interface OpenAIMessage {
   role: 'system' | 'developer' | 'user' | 'assistant' | 'tool';
   content?: string | OpenAIContentPart[] | null;
+  /** Reasoning trace from reasoning models (DeepSeek/Doubao/Qwen-Reasoning). */
+  reasoning_content?: string | null;
   name?: string;
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;

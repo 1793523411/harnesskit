@@ -58,6 +58,20 @@ Every event carries:
 - `ids: { sessionId, turnId, callId? }` — correlation IDs
 - `source: 'l1' | 'l2'` — which integration layer produced it (debug only)
 
+### Normalized content blocks
+
+`turn.start.request.messages[].content` and `turn.end.response.content` use a small shared content-block union, regardless of provider:
+
+```ts
+type NormalizedContent =
+  | { type: 'text';     text: string }
+  | { type: 'thinking'; text: string }   // reasoning trace (Anthropic thinking, DeepSeek/Doubao reasoning_content)
+  | { type: 'tool_use';     id: string; name: string; input: unknown }
+  | { type: 'tool_result';  toolUseId: string; content: string | NormalizedContent[]; isError?: boolean };
+```
+
+A reasoning model's `turn.end` typically yields `[{type:'thinking', ...}, {type:'text', ...}]` — same code reads it whether the model is Claude (with `thinking` blocks) or DeepSeek/Doubao (with `reasoning_content`).
+
 ## Gateable events
 
 Only `tool.call.requested` is **gateable** — that is, an interceptor calling `ctx.deny(reason)` will cause the bus to short-circuit dispatch and report the deny back to the caller of `emit()`. On any other event, `deny()` is a no-op with a console warning.

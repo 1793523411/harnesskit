@@ -52,17 +52,22 @@ const normalizeMessage = (m: OpenAIMessage): NormalizedMessage[] => {
     return [{ role: 'user', content: stringifyContent(m.content) }];
   }
   // assistant
-  if (m.tool_calls && m.tool_calls.length > 0) {
+  const hasReasoning = typeof m.reasoning_content === 'string' && m.reasoning_content.length > 0;
+  const hasTools = m.tool_calls && m.tool_calls.length > 0;
+  if (hasReasoning || hasTools) {
     const blocks: NormalizedContent[] = [];
+    if (hasReasoning) blocks.push({ type: 'thinking', text: m.reasoning_content as string });
     const text = stringifyContent(m.content);
     if (text) blocks.push({ type: 'text', text });
-    for (const tc of m.tool_calls) {
-      blocks.push({
-        type: 'tool_use',
-        id: tc.id,
-        name: tc.function.name,
-        input: safeParseJson(tc.function.arguments ?? '{}'),
-      });
+    if (m.tool_calls) {
+      for (const tc of m.tool_calls) {
+        blocks.push({
+          type: 'tool_use',
+          id: tc.id,
+          name: tc.function.name,
+          input: safeParseJson(tc.function.arguments ?? '{}'),
+        });
+      }
     }
     return [{ role: 'assistant', content: blocks }];
   }
@@ -95,6 +100,9 @@ export const normalizeResponse = (res: OpenAIResponse): NormalizedResponse => {
   const choice = res.choices[0];
   if (!choice) return { content: [] };
   const blocks: NormalizedContent[] = [];
+  if (choice.message.reasoning_content) {
+    blocks.push({ type: 'thinking', text: choice.message.reasoning_content });
+  }
   const text = stringifyContent(choice.message.content);
   if (text) blocks.push({ type: 'text', text });
   if (choice.message.tool_calls) {

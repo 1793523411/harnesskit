@@ -305,4 +305,119 @@ describe('OpenAI Chat Completions L1', () => {
     if (turnStart?.type !== 'turn.start') throw new Error('expected turn.start');
     expect(turnStart.provider).toBe('openrouter');
   });
+
+  it('normalizes reasoning_content to a thinking block (non-streaming)', async () => {
+    const bus = new EventBus();
+    const events = collectEvents(bus);
+    const target = {
+      fetch: async () =>
+        mockResponse({
+          id: 'chatcmpl_r1',
+          model: 'doubao-seed',
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: 'The answer is 4.',
+                reasoning_content: 'Adding 2 + 2 step by step gives 4.',
+              },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: { prompt_tokens: 8, completion_tokens: 12 },
+        }),
+    };
+    const dispose = installFetchInterceptor({ bus, target });
+    await target.fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      body: JSON.stringify({
+        model: 'doubao-seed',
+        messages: [{ role: 'user', content: 'what is 2+2' }],
+      }),
+    });
+    dispose();
+
+    const turnEnd = events.find((e) => e.type === 'turn.end');
+    if (turnEnd?.type !== 'turn.end') throw new Error('expected turn.end');
+    const blocks = turnEnd.response?.content ?? [];
+    expect(blocks[0]).toEqual({
+      type: 'thinking',
+      text: 'Adding 2 + 2 step by step gives 4.',
+    });
+    expect(blocks[1]).toEqual({ type: 'text', text: 'The answer is 4.' });
+  });
+
+  it('reassembles streaming reasoning_content deltas into a thinking block', async () => {
+    const bus = new EventBus();
+    const events = collectEvents(bus);
+    const target = {
+      fetch: async () => {
+        const stream = sseStream([
+          {
+            id: 'chatcmpl_r2',
+            model: 'doubao-seed',
+            choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: 'Let' } }],
+          },
+          { choices: [{ index: 0, delta: { reasoning_content: ' me think' } }] },
+          { choices: [{ index: 0, delta: { reasoning_content: ' carefully.' } }] },
+          { choices: [{ index: 0, delta: { content: 'OK.' } }] },
+          { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+        ]);
+        return new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      },
+    };
+    const dispose = installFetchInterceptor({ bus, target });
+    const res = await target.fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      body: JSON.stringify({
+        model: 'doubao-seed',
+        stream: true,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    await res.text();
+    await new Promise((r) => setTimeout(r, 20));
+    dispose();
+
+    const turnEnd = events.find((e) => e.type === 'turn.end');
+    if (turnEnd?.type !== 'turn.end') throw new Error('expected turn.end');
+    const blocks = turnEnd.response?.content ?? [];
+    const thinking = blocks.find((b) => b.type === 'thinking');
+    expect(thinking).toEqual({ type: 'thinking', text: 'Let me think carefully.' });
+    const text = blocks.find((b) => b.type === 'text');
+    expect(text).toEqual({ type: 'text', text: 'OK.' });
+  });
+
+  it('detects OpenAI-compatible endpoints at non-/v1/ paths via customHosts', async () => {
+    const bus = new EventBus();
+    const events = collectEvents(bus);
+    const target = {
+      fetch: async () =>
+        mockResponse({
+          id: 'volcengine_demo',
+          model: 'doubao-seed',
+          choices: [
+            { index: 0, message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' },
+          ],
+        }),
+    };
+    const dispose = installFetchInterceptor({
+      bus,
+      target,
+      customHosts: { openai: ['ark.cn-beijing.volces.com'] },
+    });
+    await target.fetch('https://ark.cn-beijing.volces.com/api/v3/chat/completions', {
+      method: 'POST',
+      body: JSON.stringify({ model: 'doubao-seed', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    dispose();
+
+    const turnStart = events.find((e) => e.type === 'turn.start');
+    if (turnStart?.type !== 'turn.start') throw new Error('expected turn.start');
+    expect(turnStart.provider).toBe('openai');
+  });
 });

@@ -22,7 +22,7 @@ export const detectAnthropic = (
     return false;
   }
 
-  if (url.pathname !== '/v1/messages') return false;
+  if (!url.pathname.endsWith('/v1/messages')) return false;
   const hosts = opts.customHosts ? new Set([...DEFAULT_HOSTS, ...opts.customHosts]) : DEFAULT_HOSTS;
   return hosts.has(url.host);
 };

@@ -20,8 +20,7 @@ const isPostMethod = (input: RequestInfo | URL, init: RequestInit | undefined): 
   return method === 'POST';
 };
 
-const isChatCompletionsPath = (pathname: string): boolean =>
-  pathname === '/v1/chat/completions' || pathname === '/api/v1/chat/completions';
+const isChatCompletionsPath = (pathname: string): boolean => pathname.endsWith('/chat/completions');
 
 export const detectOpenAIChat = (
   input: RequestInfo | URL,

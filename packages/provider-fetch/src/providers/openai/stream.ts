@@ -11,6 +11,7 @@ interface AccumState {
   id?: string;
   model?: string;
   textParts: string[];
+  reasoningParts: string[];
   toolCalls: Map<number, ToolAccum>;
   finishReason?: string;
   usage?: OpenAIUsage;
@@ -18,6 +19,7 @@ interface AccumState {
 
 const createAccum = (): AccumState => ({
   textParts: [],
+  reasoningParts: [],
   toolCalls: new Map(),
 });
 
@@ -48,6 +50,9 @@ const processChunk = (data: AnyJson, accum: AccumState): void => {
   const delta = choice.delta as AnyJson | undefined;
   if (!delta) return;
   if (typeof delta.content === 'string') accum.textParts.push(delta.content);
+  if (typeof delta.reasoning_content === 'string') {
+    accum.reasoningParts.push(delta.reasoning_content);
+  }
 
   const toolDeltas = delta.tool_calls as Array<AnyJson> | undefined;
   if (toolDeltas) {
@@ -73,6 +78,9 @@ const finalize = (accum: AccumState): OpenAIResponse => {
     role: 'assistant',
     content: accum.textParts.length > 0 ? accum.textParts.join('') : null,
   };
+  if (accum.reasoningParts.length > 0) {
+    message.reasoning_content = accum.reasoningParts.join('');
+  }
   if (accum.toolCalls.size > 0) {
     const tcs: OpenAIToolCall[] = [];
     const indices = [...accum.toolCalls.keys()].sort((a, b) => a - b);
