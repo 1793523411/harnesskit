@@ -161,6 +161,81 @@ export interface HostnameAllowlistOptions {
   id?: string;
 }
 
+export type PiiPatternName = 'email' | 'ssn' | 'creditcard' | 'phone' | 'ipv4';
+
+const PII_REGEXES: Record<PiiPatternName, RegExp> = {
+  email: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
+  ssn: /\b\d{3}-\d{2}-\d{4}\b/,
+  creditcard: /\b(?:\d[ -]?){13,19}\b/,
+  phone: /\b\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b/,
+  ipv4: /\b(?:\d{1,3}\.){3}\d{1,3}\b/,
+};
+
+export interface PiiScanOptions {
+  /** Patterns to scan for. Default: ['email', 'ssn', 'creditcard']. */
+  patterns?: readonly (PiiPatternName | RegExp)[];
+  /** Tools to scan. Default: all. */
+  tools?: readonly Pattern[];
+  id?: string;
+}
+
+const scanString = (
+  s: string,
+  regexes: readonly RegExp[],
+): { matched: string; pattern: RegExp } | undefined => {
+  for (const re of regexes) {
+    const m = s.match(re);
+    if (m) return { matched: m[0], pattern: re };
+  }
+  return undefined;
+};
+
+const scanValue = (
+  v: unknown,
+  regexes: readonly RegExp[],
+): { matched: string; pattern: RegExp } | undefined => {
+  if (typeof v === 'string') return scanString(v, regexes);
+  if (Array.isArray(v)) {
+    for (const item of v) {
+      const r = scanValue(item, regexes);
+      if (r) return r;
+    }
+  } else if (v && typeof v === 'object') {
+    for (const key of Object.keys(v as Record<string, unknown>)) {
+      const r = scanValue((v as Record<string, unknown>)[key], regexes);
+      if (r) return r;
+    }
+  }
+  return undefined;
+};
+
+export const piiScan = (opts: PiiScanOptions = {}): Policy => {
+  const patternList: readonly (PiiPatternName | RegExp)[] = opts.patterns ?? [
+    'email',
+    'ssn',
+    'creditcard',
+  ];
+  const regexes: RegExp[] = patternList.map((p) => (p instanceof RegExp ? p : PII_REGEXES[p]));
+  const toolPatterns = opts.tools ?? ['*'];
+  return {
+    id: opts.id ?? 'pii-scan',
+    description: `block tool inputs containing PII matches (${patternList
+      .map((p) => (p instanceof RegExp ? p.source : p))
+      .join(',')})`,
+    decide(e: GateableEvent): PolicyDecision {
+      if (!toolPatterns.some((tp) => matchPattern(tp, e.call.name))) return { allow: true };
+      const hit = scanValue(e.call.input, regexes);
+      if (hit) {
+        return {
+          allow: false,
+          reason: `tool input matches PII pattern (${hit.pattern.source}): "${hit.matched}"`,
+        };
+      }
+      return { allow: true };
+    },
+  };
+};
+
 export const hostnameAllowlist = (opts: HostnameAllowlistOptions): Policy => ({
   id: opts.id ?? `hostname-allowlist:${opts.argPath}`,
   description: `restrict ${opts.argPath} hostname to ${opts.hosts.join(',')}`,

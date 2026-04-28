@@ -87,6 +87,25 @@ hostnameAllowlist({
 // denies  https://evil.com/...
 ```
 
+### `piiScan({ patterns?, tools?, id? })`
+
+Recursively scans the `input` of tool calls for PII patterns. Supports built-in pattern names and arbitrary `RegExp`. Default: `['email', 'ssn', 'creditcard']` across all tools.
+
+```ts
+import { piiScan } from '@harnesskit/policy';
+
+piiScan();  // defaults: email + ssn + creditcard, all tools
+
+piiScan({ patterns: ['email', 'phone', 'ipv4'] });
+
+piiScan({
+  patterns: ['email', 'ssn', /SECRET-[A-Z0-9]+/],
+  tools: ['send_webhook', 'http_*'],   // only scan these tools
+});
+```
+
+Built-in pattern names: `'email' | 'ssn' | 'creditcard' | 'phone' | 'ipv4'`. Returns the matched string in the deny reason for debugging — be careful when surfacing reasons in logs.
+
 ## Combinators
 
 ### `allOf(policies)` — every policy must allow

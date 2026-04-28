@@ -11,6 +11,7 @@ import {
   matchAny,
   matchPattern,
   maxToolCalls,
+  piiScan,
   policy,
   requireApproval,
   tokenBudget,
@@ -213,6 +214,48 @@ describe('hostnameAllowlist', () => {
   it('rejects malformed URLs', async () => {
     const p = hostnameAllowlist({ tool: 'fetch', argPath: 'url', hosts: ['github.com'] });
     const d = await p.decide(toolEvt('fetch', { url: 'not a url' }));
+    expect(d.allow).toBe(false);
+  });
+});
+
+describe('piiScan', () => {
+  it('blocks email by default', async () => {
+    const p = piiScan();
+    const d = await p.decide(toolEvt('webhook', { body: 'contact me at john@example.com' }));
+    expect(d.allow).toBe(false);
+    expect(d.reason).toContain('john@example.com');
+  });
+
+  it('detects SSN in nested input', async () => {
+    const p = piiScan({ patterns: ['ssn'] });
+    const d = await p.decide(toolEvt('webhook', { user: { profile: { ssn: '123-45-6789' } } }));
+    expect(d.allow).toBe(false);
+    expect(d.reason).toContain('123-45-6789');
+  });
+
+  it('passes through clean input', async () => {
+    const p = piiScan();
+    expect(await p.decide(toolEvt('webhook', { body: 'just plain text' }))).toEqual({
+      allow: true,
+    });
+  });
+
+  it('respects tools allowlist (only scan webhook)', async () => {
+    const p = piiScan({ tools: ['webhook'] });
+    expect(await p.decide(toolEvt('echo', { body: 'a@b.com' }))).toEqual({ allow: true });
+    const blocked = await p.decide(toolEvt('webhook', { body: 'a@b.com' }));
+    expect(blocked.allow).toBe(false);
+  });
+
+  it('accepts custom RegExp patterns', async () => {
+    const p = piiScan({ patterns: [/SECRET-\d+/] });
+    const d = await p.decide(toolEvt('webhook', { body: 'token=SECRET-42' }));
+    expect(d.allow).toBe(false);
+  });
+
+  it('walks arrays in input', async () => {
+    const p = piiScan();
+    const d = await p.decide(toolEvt('webhook', { recipients: ['ok@x.com', 'normal text'] }));
     expect(d.allow).toBe(false);
   });
 });

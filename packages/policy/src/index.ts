@@ -9,12 +9,15 @@ export {
   maxToolCalls,
   argRegex,
   hostnameAllowlist,
+  piiScan,
 } from './builtins.js';
 export type {
   RequireApprovalOptions,
   TokenBudget,
   ArgRegexOptions,
   HostnameAllowlistOptions,
+  PiiScanOptions,
+  PiiPatternName,
 } from './builtins.js';
 
 export { combinePolicies, allOf, anyOf } from './combinator.js';

@@ -2,6 +2,7 @@ import type { Policy } from '@harnesskit/core';
 import {
   type ArgRegexOptions,
   type HostnameAllowlistOptions,
+  type PiiScanOptions,
   type RequireApprovalOptions,
   type TokenBudget,
   allowTools,
@@ -9,6 +10,7 @@ import {
   denyTools,
   hostnameAllowlist,
   maxToolCalls,
+  piiScan,
   requireApproval,
   tokenBudget,
 } from './builtins.js';
@@ -44,6 +46,10 @@ export class PolicyBuilder {
   }
   hostnameAllowlist(opts: HostnameAllowlistOptions): this {
     this.policies.push(hostnameAllowlist(opts));
+    return this;
+  }
+  piiScan(opts?: PiiScanOptions): this {
+    this.policies.push(piiScan(opts ?? {}));
     return this;
   }
   add(p: Policy): this {

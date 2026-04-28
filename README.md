@@ -101,6 +101,19 @@ Guarded    tools used: [shell, list_files, shell, list_files]  denied: 2
 
 Same model, same prompt, different config. The agent's dangerous attempts get caught at the wire layer, the model sees a tool-result error, and adapts to the safer alternative on its own. Reproducible end-to-end.
 
+### More before/after showcases
+
+Run `pnpm --filter @harnesskit/examples showcases` to run all five sequentially. Sample real-model outputs:
+
+| Showcase | Baseline | Guarded |
+| --- | --- | --- |
+| `showcase-tokens` (`tokenBudget`) | 10 weather calls | 7 calls + **5 denials** when budget exceeded |
+| `showcase-args` (`argRegex`) | shell × 10 unrestricted | shell × 10, **4 destructive cmds blocked** |
+| `showcase-hostname` (`hostnameAllowlist`) | 3 fetches across the web, full answer | 10 fetches, **8 non-Wikipedia URLs blocked** |
+| `showcase-pii` (`piiScan`) | webhook posts email + SSN | **1 PII leak blocked** → model strips PII and retries successfully |
+
+Each showcase is a self-contained `.ts` file you can read, modify, and re-run. See [`examples/src/showcase-*.ts`](./examples/src).
+
 ## Status
 
 `v0.0.0` — internal API stable, public release pending. 70+ unit tests, lint clean, four mock examples plus a real-API integration suite covering Volcengine / DeepSeek / Doubao / MiniMax / OpenAI gpt-5 series, including reasoning-model `reasoning_content` normalization, 4-provider customHosts, multi-turn tool chains, and concurrent sessions. OpenAI-compatible providers (Volcengine, Groq, Together, any LiteLLM proxy) work via `customHosts.openai`.
