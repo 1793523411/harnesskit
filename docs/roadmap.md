@@ -30,8 +30,10 @@ installFetchInterceptor({
 ```
 
 What's still pending:
-- **`/converse-stream`** — uses AWS Event Stream binary framing (`application/vnd.amazon.eventstream`): 4-byte total length, 4-byte headers length, prelude CRC, headers, JSON payload, message CRC. Currently we drain the body and emit a clear "not yet implemented" error event instead of garbage. Use `/converse` (non-streaming) until this lands.
 - **Per-model `/invoke` API** — `/model/<id>/invoke` and `/model/<id>/invoke-with-response-stream` use model-specific wire formats (Claude / Llama / Mistral / Titan each different). Detection deliberately doesn't claim these — they need their own dispatchers.
+
+What's now in for streaming:
+- **`/converse-stream`** uses AWS Event Stream binary framing (`application/vnd.amazon.eventstream`): 4-byte total length, 4-byte headers length, prelude CRC, headers, JSON payload, message CRC. The parser in `packages/provider-fetch/src/providers/bedrock/eventstream.ts` reads frames across chunk boundaries and yields `{headers, payload}`. Bedrock chunk types (`messageStart`, `contentBlock{Start,Delta,Stop}`, `messageStop`, `metadata`) assemble into the same `BedrockResponse` the non-streaming path produces. Mid-stream cancel fires when a `toolUse` block completes (`contentBlockStop` for a tool block). CRC validation is best-effort — we frame, we don't validate.
 
 ## Google Vertex AI provider
 
@@ -77,11 +79,12 @@ For real prevention (e.g., model emits `shell rm -rf /`, host SDK is going to ac
 
 - Web trace viewer: tree view (parent/child relationships from `subagent.spawn`), comparison mode (two traces side-by-side), search-by-content.
 - Replay: support time-shifting (replay at original wall-clock pace) for live UI demos.
-- Bedrock `/converse-stream` (Event Stream binary framing) + per-model `/invoke` dispatcher.
+- Bedrock per-model `/invoke` dispatcher.
 
 ## Recently shipped
 
-- **AWS Bedrock Converse API** — detect, normalize, deny rewrite, content rewrite all live. Pair with `signRequest` for Sig V4. `/converse` (non-streaming) works fully; `/converse-stream` emits a clear "not yet implemented" error event for now. Showcase: `examples/src/showcase-bedrock.ts`.
+- **Bedrock `/converse-stream` Event Stream parser** — full binary-framing parser in `providers/bedrock/eventstream.ts`. Mid-stream cancel on toolUse completion. Server `exception` frames surface as `error` events. CRC validation is best-effort — we frame, we don't validate.
+- **AWS Bedrock Converse API** — detect, normalize, deny rewrite, content rewrite all live. Pair with `signRequest` for Sig V4. Both `/converse` (non-streaming) and `/converse-stream` (streaming) work fully now. Showcase: `examples/src/showcase-bedrock.ts`.
 - **Anthropic Claude on Vertex** — `:rawPredict` and `:streamRawPredict` URLs on `*-aiplatform.googleapis.com` detect automatically. Model is extracted from the URL path (Vertex Claude doesn't put it in the body). Streaming is tagged from path so `:streamRawPredict` wires through the same SSE consumer as native Anthropic.
 - **Streaming runner** — `runAgentStream` returns an `AsyncGenerator` yielding `text.delta`, `reasoning.delta`, `tool.call.{started,finished}`, `round.end`, and a final `done` chunk with the full `RunAgentResult`. Same harness applies; same buffered result shape at the end. See `docs/runner.md` and `examples/src/demos/12-streaming-runner.ts`.
 - **`signRequest` hook** — let callers compute auth headers from the final serialized body. Recipe in the Bedrock section above; demo at `examples/src/showcase-sign-request.ts`.

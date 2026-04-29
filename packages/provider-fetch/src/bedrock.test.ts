@@ -1,6 +1,31 @@
 import { type AgentEvent, EventBus } from '@harnesskit/core';
 import { describe, expect, it } from 'vitest';
+import { encodeFrameForTest } from './providers/bedrock/eventstream.js';
 import { installFetchInterceptor } from './intercept.js';
+
+const eventStreamBody = (
+  events: Array<{
+    eventType: string;
+    payload: Record<string, unknown>;
+    messageType?: string;
+  }>,
+): ReadableStream<Uint8Array> => {
+  const enc = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const ev of events) {
+        const headers: Record<string, string> = {
+          ':event-type': ev.eventType,
+          ':content-type': 'application/json',
+          ':message-type': ev.messageType ?? 'event',
+        };
+        const frame = encodeFrameForTest(headers, enc.encode(JSON.stringify(ev.payload)));
+        controller.enqueue(frame);
+      }
+      controller.close();
+    },
+  });
+};
 
 const mockResponse = (body: unknown, init: ResponseInit = {}): Response =>
   new Response(typeof body === 'string' ? body : JSON.stringify(body), {
@@ -263,25 +288,208 @@ describe('Bedrock Converse L1', () => {
     expect(events.find((e) => e.type === 'turn.start')).toBeUndefined();
   });
 
-  it('emits turn.start + error event for /converse-stream (binary parsing not yet implemented)', async () => {
+  it('parses /converse-stream Event Stream frames into a normalized response', async () => {
     const bus = new EventBus();
     const events = collectEvents(bus);
     const target = {
-      fetch: async () => {
-        const enc = new TextEncoder();
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(enc.encode('opaque-eventstream-bytes'));
-              controller.close();
+      fetch: async () =>
+        new Response(
+          eventStreamBody([
+            { eventType: 'messageStart', payload: { role: 'assistant' } },
+            // Text block 0
+            {
+              eventType: 'contentBlockDelta',
+              payload: { contentBlockIndex: 0, delta: { text: 'Hello ' } },
             },
-          }),
+            {
+              eventType: 'contentBlockDelta',
+              payload: { contentBlockIndex: 0, delta: { text: 'world' } },
+            },
+            { eventType: 'contentBlockStop', payload: { contentBlockIndex: 0 } },
+            // Tool use block 1
+            {
+              eventType: 'contentBlockStart',
+              payload: {
+                contentBlockIndex: 1,
+                start: { toolUse: { toolUseId: 'tu_s', name: 'shell' } },
+              },
+            },
+            {
+              eventType: 'contentBlockDelta',
+              payload: {
+                contentBlockIndex: 1,
+                delta: { toolUse: { input: '{"cmd":' } },
+              },
+            },
+            {
+              eventType: 'contentBlockDelta',
+              payload: {
+                contentBlockIndex: 1,
+                delta: { toolUse: { input: '"ls"}' } },
+              },
+            },
+            { eventType: 'contentBlockStop', payload: { contentBlockIndex: 1 } },
+            { eventType: 'messageStop', payload: { stopReason: 'tool_use' } },
+            {
+              eventType: 'metadata',
+              payload: {
+                usage: { inputTokens: 9, outputTokens: 11, totalTokens: 20 },
+                metrics: { latencyMs: 412 },
+              },
+            },
+          ]),
           {
             status: 200,
             headers: { 'content-type': 'application/vnd.amazon.eventstream' },
           },
-        );
+        ),
+    };
+    const dispose = installFetchInterceptor({ bus, target });
+    const res = await target.fetch(
+      'https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-5-sonnet/converse-stream',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: [{ text: 'list files' }] }],
+        }),
       },
+    );
+    await res.text();
+    await new Promise((r) => setTimeout(r, 30));
+    dispose();
+
+    const turnEnd = events.find((e) => e.type === 'turn.end');
+    if (turnEnd?.type !== 'turn.end') throw new Error('expected turn.end');
+    const text = turnEnd.response?.content
+      ?.filter((b) => b.type === 'text')
+      .map((b) => (b as { text: string }).text)
+      .join('');
+    expect(text).toBe('Hello world');
+
+    const usage = events.find((e) => e.type === 'usage');
+    if (usage?.type !== 'usage') throw new Error('expected usage');
+    expect(usage.usage.inputTokens).toBe(9);
+    expect(usage.usage.outputTokens).toBe(11);
+
+    // Eager: tool.call.requested fires from contentBlockStop, before turn.end
+    const tool = events.find((e) => e.type === 'tool.call.requested');
+    if (tool?.type !== 'tool.call.requested') throw new Error('expected tool.call.requested');
+    expect(tool.call.id).toBe('tu_s');
+    expect(tool.call.name).toBe('shell');
+    expect(tool.call.input).toEqual({ cmd: 'ls' });
+    const types = events.map((e) => e.type);
+    expect(types.indexOf('tool.call.requested')).toBeLessThan(types.indexOf('turn.end'));
+  });
+
+  it('aborts /converse-stream mid-stream when policy denies a toolUse', async () => {
+    const bus = new EventBus();
+    bus.use({
+      on: (e, ctx) => {
+        if (e.type === 'tool.call.requested' && e.call.name === 'shell') {
+          ctx.deny('shell disabled', 'no-shell');
+        }
+      },
+    });
+    const events = collectEvents(bus);
+    let cancelCalled = false;
+    const target = {
+      fetch: async () => {
+        const stream = eventStreamBody([
+          { eventType: 'messageStart', payload: { role: 'assistant' } },
+          {
+            eventType: 'contentBlockStart',
+            payload: {
+              contentBlockIndex: 0,
+              start: { toolUse: { toolUseId: 'tu_x', name: 'shell' } },
+            },
+          },
+          {
+            eventType: 'contentBlockDelta',
+            payload: {
+              contentBlockIndex: 0,
+              delta: { toolUse: { input: '{"cmd":"rm -rf"}' } },
+            },
+          },
+          { eventType: 'contentBlockStop', payload: { contentBlockIndex: 0 } },
+          // These should never be processed if abort works — a second toolUse
+          // we'd otherwise emit, plus stop frames.
+          {
+            eventType: 'contentBlockStart',
+            payload: {
+              contentBlockIndex: 1,
+              start: { toolUse: { toolUseId: 'tu_late', name: 'should_not_emit' } },
+            },
+          },
+          {
+            eventType: 'contentBlockDelta',
+            payload: { contentBlockIndex: 1, delta: { toolUse: { input: '{}' } } },
+          },
+          { eventType: 'contentBlockStop', payload: { contentBlockIndex: 1 } },
+          { eventType: 'messageStop', payload: { stopReason: 'tool_use' } },
+        ]);
+        // Wrap the stream so we can observe cancel()
+        const wrapped = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            const reader = stream.getReader();
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                controller.enqueue(value);
+              }
+            } finally {
+              controller.close();
+            }
+          },
+          cancel() {
+            cancelCalled = true;
+          },
+        });
+        return new Response(wrapped, {
+          status: 200,
+          headers: { 'content-type': 'application/vnd.amazon.eventstream' },
+        });
+      },
+    };
+    const dispose = installFetchInterceptor({ bus, target });
+    const res = await target.fetch(
+      'https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-5-sonnet/converse-stream',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: [{ text: 'do it' }] }],
+        }),
+      },
+    );
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+    dispose();
+
+    const types = events.map((e) => e.type);
+    expect(types).toContain('tool.call.denied');
+    expect(cancelCalled).toBe(true);
+    const calls = events.filter((e) => e.type === 'tool.call.requested');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('surfaces a server exception frame as an error event', async () => {
+    const bus = new EventBus();
+    const events = collectEvents(bus);
+    const target = {
+      fetch: async () =>
+        new Response(
+          eventStreamBody([
+            {
+              eventType: 'throttlingException',
+              messageType: 'exception',
+              payload: { message: 'Rate exceeded for model' },
+            },
+          ]),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/vnd.amazon.eventstream' },
+          },
+        ),
     };
     const dispose = installFetchInterceptor({ bus, target });
     const res = await target.fetch(
@@ -297,9 +505,8 @@ describe('Bedrock Converse L1', () => {
     await new Promise((r) => setTimeout(r, 30));
     dispose();
 
-    expect(events.find((e) => e.type === 'turn.start')).toBeDefined();
     const err = events.find((e) => e.type === 'error');
     if (err?.type !== 'error') throw new Error('expected error event');
-    expect(err.message).toContain('Event Stream');
+    expect(err.message).toContain('Rate exceeded');
   });
 });
