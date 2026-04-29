@@ -77,12 +77,13 @@ For real prevention (e.g., model emits `shell rm -rf /`, host SDK is going to ac
 
 ## Smaller improvements queued
 
-- Web trace viewer: tree view (parent/child relationships from `subagent.spawn`), comparison mode (two traces side-by-side), search-by-content.
+- Trace viewer: comparison mode (two traces side-by-side, diff'd).
 - Replay: support time-shifting (replay at original wall-clock pace) for live UI demos.
 - Bedrock per-model `/invoke` dispatcher.
 
 ## Recently shipped
 
+- **Trace viewer tree view + keyboard nav** — `apps/trace-viewer/index.html` gains a Flat/Tree toggle. In Tree mode, sessions group together with child agents nested under their `subagent.spawn` parent (recursive — N levels deep). `j`/`k` navigate between events, scrolling the selected one into view. Session headers collapse on click. The bundled demo trace now includes a parent → child research-agent spawn so you can see tree mode work without loading a real trace.
 - **Bedrock `/converse-stream` Event Stream parser** — full binary-framing parser in `providers/bedrock/eventstream.ts`. Mid-stream cancel on toolUse completion. Server `exception` frames surface as `error` events. CRC validation is best-effort — we frame, we don't validate.
 - **AWS Bedrock Converse API** — detect, normalize, deny rewrite, content rewrite all live. Pair with `signRequest` for Sig V4. Both `/converse` (non-streaming) and `/converse-stream` (streaming) work fully now. Showcase: `examples/src/showcase-bedrock.ts`.
 - **Anthropic Claude on Vertex** — `:rawPredict` and `:streamRawPredict` URLs on `*-aiplatform.googleapis.com` detect automatically. Model is extracted from the URL path (Vertex Claude doesn't put it in the body). Streaming is tagged from path so `:streamRawPredict` wires through the same SSE consumer as native Anthropic.

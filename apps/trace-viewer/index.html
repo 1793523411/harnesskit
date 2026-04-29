@@ -131,6 +131,54 @@
     .type-approval\.requested, .type-approval\.resolved { background: #4a3a1f; color: var(--yellow); }
     .type-context\.compacted { background: #2a4a4a; color: #6dccd0; }
 
+    .session-group { margin-bottom: 12px; }
+    .session-header {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 6px 8px;
+      background: #1a1d26;
+      border: 1px solid var(--border);
+      border-radius: 4px 4px 0 0;
+      font-size: 11px;
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+    }
+    .session-header:hover { background: #1f232e; }
+    .session-header .session-id {
+      color: var(--accent);
+      font-weight: 600;
+      font-size: 12px;
+    }
+    .session-header .session-meta { color: var(--muted); }
+    .session-header .toggle { width: 12px; display: inline-block; }
+    .session-events {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 4px 0 0;
+      margin-left: 0;
+    }
+    .session-events.collapsed { display: none; }
+    .session-group[data-depth="1"] { margin-left: 24px; border-left: 2px solid #2a4a4a; padding-left: 12px; }
+    .session-group[data-depth="2"] { margin-left: 24px; border-left: 2px solid #2a4a4a; padding-left: 12px; }
+    .session-group[data-depth="3"] { margin-left: 24px; border-left: 2px solid #2a4a4a; padding-left: 12px; }
+    .session-group[data-depth="4"] { margin-left: 24px; border-left: 2px solid #2a4a4a; padding-left: 12px; }
+    .keyboard-hint {
+      color: var(--muted);
+      font-size: 10px;
+      padding: 4px 8px;
+    }
+    kbd {
+      background: #1d212c;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-size: 10px;
+      color: var(--text);
+    }
+
     .right h2 { font-size: 13px; color: var(--accent); margin: 0 0 12px; }
     .right pre {
       background: #0a0c10;
@@ -174,7 +222,11 @@
         <option value="l1">L1 only</option>
         <option value="l2">L2 only</option>
       </select>
-      <input type="text" id="filterText" placeholder="search…" />
+      <select id="viewMode" title="Flat = chronological. Tree = grouped by session, child agents nested under spawn parent.">
+        <option value="flat">Flat</option>
+        <option value="tree">Tree</option>
+      </select>
+      <input type="text" id="filterText" placeholder="search… (j/k to navigate)" />
       <span style="color: var(--muted); margin-left: auto;">
         <span id="counter"></span>
       </span>
@@ -285,16 +337,9 @@
       $('#counter').textContent = `${filtered.length}/${events.length}`;
 
       const base = trace.startedAt;
-      $('#timeline').innerHTML = filtered.map((e) => {
-        const cls = `type-${e.type.replace(/\./g, '\\.')}`;
-        return `
-          <div class="event ${selectedIdx === e._idx ? 'selected' : ''}" data-idx="${e._idx}">
-            <div class="ts">${formatTs(e.ts, base)}</div>
-            <div><span class="type type-${e.type.replace(/\./g, '\\.')}">${e.type}</span></div>
-            <div class="summary">${escapeHtml(summarize(e))}</div>
-          </div>
-        `;
-      }).join('');
+      const viewMode = $('#viewMode').value;
+      $('#timeline').innerHTML =
+        viewMode === 'tree' ? renderTree(filtered, base) : renderFlat(filtered, base);
 
       // populate type filter
       const types = [...new Set(events.map((e) => e.type))].sort();
@@ -307,6 +352,118 @@
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[c]));
 
+    const eventRowHtml = (e, base) => `
+      <div class="event ${selectedIdx === e._idx ? 'selected' : ''}" data-idx="${e._idx}">
+        <div class="ts">${formatTs(e.ts, base)}</div>
+        <div><span class="type type-${e.type.replace(/\./g, '\\.')}">${e.type}</span></div>
+        <div class="summary">${escapeHtml(summarize(e))}</div>
+      </div>
+    `;
+
+    const renderFlat = (filtered, base) => filtered.map((e) => eventRowHtml(e, base)).join('');
+
+    const collapsedSessions = new Set();
+
+    /**
+     * Build a forest from the trace's events:
+     *  - Each session id becomes a node.
+     *  - subagent.spawn events define parent → child edges.
+     *  - Sessions with no parent are roots, rendered at depth 0.
+     *
+     * Filtered events are placed under their session node. Sessions whose
+     * events are all filtered out still render (collapsed) so the tree
+     * structure stays visible — toggle the type/source filters and the
+     * session header still shows you what was there.
+     */
+    const renderTree = (filtered, base) => {
+      const allEvents = trace?.events ?? [];
+      const sessions = new Map(); // sessionId -> { id, parent, children: [], events: [], firstTs, providerLabel }
+      const ensure = (sid) => {
+        if (!sessions.has(sid)) {
+          sessions.set(sid, {
+            id: sid,
+            parent: null,
+            children: [],
+            events: [],
+            firstTs: Number.POSITIVE_INFINITY,
+            providerLabel: null,
+            purpose: null,
+          });
+        }
+        return sessions.get(sid);
+      };
+      // First pass: discover spawn relationships from the FULL event list,
+      // not just the filtered slice — otherwise filtering hides structure.
+      for (const e of allEvents) {
+        const sid = e.ids?.sessionId;
+        if (!sid) continue;
+        const s = ensure(sid);
+        s.firstTs = Math.min(s.firstTs, e.ts);
+        if (e.type === 'turn.start' && !s.providerLabel) {
+          s.providerLabel = `${e.provider}/${e.model}`;
+        }
+        if (e.type === 'subagent.spawn') {
+          const child = ensure(e.childSessionId);
+          child.parent = e.parentSessionId;
+          if (e.purpose && !child.purpose) child.purpose = e.purpose;
+          ensure(e.parentSessionId).children.push(e.childSessionId);
+        }
+      }
+      // Second pass: place filtered events
+      for (const e of filtered) {
+        const sid = e.ids?.sessionId;
+        if (!sid) continue;
+        ensure(sid).events.push(e);
+      }
+
+      const roots = [...sessions.values()]
+        .filter((s) => !s.parent)
+        .sort((a, b) => a.firstTs - b.firstTs);
+
+      const renderNode = (s, depth) => {
+        const isCollapsed = collapsedSessions.has(s.id);
+        const childIds = [...new Set(s.children)].sort((a, b) => {
+          const aTs = sessions.get(a)?.firstTs ?? 0;
+          const bTs = sessions.get(b)?.firstTs ?? 0;
+          return aTs - bTs;
+        });
+        const meta = [
+          s.providerLabel ?? '(no turn yet)',
+          `${s.events.length}/${allEvents.filter((e) => e.ids?.sessionId === s.id).length} events`,
+          ...(s.purpose ? [`purpose: ${s.purpose}`] : []),
+          ...(childIds.length > 0 ? [`${childIds.length} child agent(s)`] : []),
+        ].join(' · ');
+        const eventsHtml = s.events.map((e) => eventRowHtml(e, base)).join('');
+        return `
+          <div class="session-group" data-depth="${depth}">
+            <div class="session-header" data-session="${escapeHtml(s.id)}">
+              <span class="toggle">${isCollapsed ? '▸' : '▾'}</span>
+              <span class="session-id">${escapeHtml(s.id.slice(0, 24))}</span>
+              <span class="session-meta">${escapeHtml(meta)}</span>
+            </div>
+            <div class="session-events ${isCollapsed ? 'collapsed' : ''}">
+              ${eventsHtml}
+              ${childIds.map((cid) => renderNode(sessions.get(cid), depth + 1)).join('')}
+            </div>
+          </div>
+        `;
+      };
+      return roots.map((r) => renderNode(r, 0)).join('');
+    };
+
+    const navigate = (dir) => {
+      const visibleIdxs = [...document.querySelectorAll('[data-idx]')].map((el) =>
+        parseInt(el.dataset.idx, 10),
+      );
+      if (visibleIdxs.length === 0) return;
+      const cur = visibleIdxs.indexOf(selectedIdx);
+      const nextPos = cur === -1 ? 0 : Math.max(0, Math.min(visibleIdxs.length - 1, cur + dir));
+      const nextIdx = visibleIdxs[nextPos];
+      showDetail(nextIdx);
+      const el = document.querySelector(`[data-idx="${nextIdx}"]`);
+      if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    };
+
     const showDetail = (idx) => {
       selectedIdx = idx;
       const e = trace.events[idx];
@@ -315,9 +472,29 @@
     };
 
     document.body.addEventListener('click', (ev) => {
+      const sessionEl = ev.target.closest('[data-session]');
+      if (sessionEl) {
+        const sid = sessionEl.dataset.session;
+        if (collapsedSessions.has(sid)) collapsedSessions.delete(sid);
+        else collapsedSessions.add(sid);
+        render();
+        return;
+      }
       const el = ev.target.closest('[data-idx]');
       if (!el) return;
       showDetail(parseInt(el.dataset.idx, 10));
+    });
+
+    document.addEventListener('keydown', (ev) => {
+      // Don't hijack typing in inputs.
+      if (ev.target.matches('input, textarea, select')) return;
+      if (ev.key === 'j') {
+        ev.preventDefault();
+        navigate(1);
+      } else if (ev.key === 'k') {
+        ev.preventDefault();
+        navigate(-1);
+      }
     });
 
     const loadTrace = (text) => {
@@ -339,9 +516,10 @@
       loadTrace(await file.text());
     });
 
-    ['filterType', 'filterSource', 'filterText'].forEach((id) =>
+    ['filterType', 'filterSource', 'filterText', 'viewMode'].forEach((id) =>
       $('#' + id).addEventListener('input', render),
     );
+    $('#viewMode').addEventListener('change', render);
 
     // Drag-and-drop
     document.addEventListener('dragover', (e) => e.preventDefault());
@@ -352,22 +530,34 @@
       loadTrace(await f.text());
     });
 
-    // Demo trace for instant exploration
+    // Demo trace for instant exploration. Includes a parent agent that
+    // spawns a child research agent so tree view has something to show.
     const DEMO_TRACE = {
-      sessionId: 'sess_demo',
+      sessionId: 'sess_parent',
       startedAt: 0,
-      endedAt: 1300,
+      endedAt: 2400,
       events: [
-        { type: 'session.start', ts: 0, ids: { sessionId: 'sess_demo', turnId: 't1' }, source: 'l1' },
-        { type: 'turn.start', ts: 50, ids: { sessionId: 'sess_demo', turnId: 't1' }, source: 'l1', provider: 'anthropic', model: 'claude-opus-4-7', request: { messages: [{ role: 'user', content: 'list /etc' }] } },
-        { type: 'turn.end', ts: 950, ids: { sessionId: 'sess_demo', turnId: 't1' }, source: 'l1', durationMs: 900, response: { content: [{ type: 'tool_use', id: 'toolu_a', name: 'shell', input: { cmd: 'ls /etc' } }], stopReason: 'tool_use' } },
-        { type: 'usage', ts: 950, ids: { sessionId: 'sess_demo', turnId: 't1' }, source: 'l1', usage: { inputTokens: 18, outputTokens: 9 } },
-        { type: 'tool.call.requested', ts: 951, ids: { sessionId: 'sess_demo', turnId: 't1', callId: 'toolu_a' }, source: 'l1', call: { id: 'toolu_a', name: 'shell', input: { cmd: 'ls /etc' } } },
-        { type: 'tool.call.denied', ts: 953, ids: { sessionId: 'sess_demo', turnId: 't1', callId: 'toolu_a' }, source: 'l1', call: { id: 'toolu_a', name: 'shell', input: { cmd: 'ls /etc' } }, reason: 'shell is denied', policyId: 'no-shell' },
-        { type: 'turn.start', ts: 1000, ids: { sessionId: 'sess_demo', turnId: 't2' }, source: 'l1', provider: 'anthropic', model: 'claude-opus-4-7', request: { messages: [{ role: 'user', content: 'list /etc' }, { role: 'assistant', content: '...' }, { role: 'user', content: '[harnesskit denied]...' }] } },
-        { type: 'turn.end', ts: 1280, ids: { sessionId: 'sess_demo', turnId: 't2' }, source: 'l1', durationMs: 280, response: { content: [{ type: 'text', text: "Sorry, I can't run shell." }], stopReason: 'end_turn' } },
-        { type: 'usage', ts: 1280, ids: { sessionId: 'sess_demo', turnId: 't2' }, source: 'l1', usage: { inputTokens: 28, outputTokens: 14 } },
-        { type: 'session.end', ts: 1300, ids: { sessionId: 'sess_demo', turnId: 't2' }, source: 'l1', reason: 'complete' },
+        { type: 'session.start', ts: 0, ids: { sessionId: 'sess_parent', turnId: 'p1' }, source: 'l1' },
+        { type: 'turn.start', ts: 50, ids: { sessionId: 'sess_parent', turnId: 'p1' }, source: 'l1', provider: 'anthropic', model: 'claude-opus-4-7', request: { messages: [{ role: 'user', content: 'research X then summarize' }] } },
+        { type: 'turn.end', ts: 850, ids: { sessionId: 'sess_parent', turnId: 'p1' }, source: 'l1', durationMs: 800, response: { content: [{ type: 'tool_use', id: 'toolu_research', name: 'spawn_researcher', input: { topic: 'rust async runtimes' } }], stopReason: 'tool_use' } },
+        { type: 'usage', ts: 850, ids: { sessionId: 'sess_parent', turnId: 'p1' }, source: 'l1', usage: { inputTokens: 22, outputTokens: 11 } },
+        { type: 'tool.call.requested', ts: 851, ids: { sessionId: 'sess_parent', turnId: 'p1', callId: 'toolu_research' }, source: 'l1', call: { id: 'toolu_research', name: 'spawn_researcher', input: { topic: 'rust async runtimes' } } },
+        { type: 'subagent.spawn', ts: 900, ids: { sessionId: 'sess_parent', turnId: 'p1' }, source: 'l2', parentSessionId: 'sess_parent', childSessionId: 'sess_child', purpose: 'research' },
+        { type: 'session.start', ts: 902, ids: { sessionId: 'sess_child', turnId: 'c1' }, source: 'l1' },
+        { type: 'turn.start', ts: 920, ids: { sessionId: 'sess_child', turnId: 'c1' }, source: 'l1', provider: 'openai', model: 'gpt-4o-mini', request: { messages: [{ role: 'user', content: 'research rust async runtimes' }] } },
+        { type: 'turn.end', ts: 1480, ids: { sessionId: 'sess_child', turnId: 'c1' }, source: 'l1', durationMs: 560, response: { content: [{ type: 'tool_use', id: 'toolu_search', name: 'web_search', input: { q: 'tokio vs async-std' } }], stopReason: 'tool_use' } },
+        { type: 'usage', ts: 1480, ids: { sessionId: 'sess_child', turnId: 'c1' }, source: 'l1', usage: { inputTokens: 14, outputTokens: 18 } },
+        { type: 'tool.call.requested', ts: 1481, ids: { sessionId: 'sess_child', turnId: 'c1', callId: 'toolu_search' }, source: 'l1', call: { id: 'toolu_search', name: 'web_search', input: { q: 'tokio vs async-std' } } },
+        { type: 'tool.call.resolved', ts: 1620, ids: { sessionId: 'sess_child', turnId: 'c1', callId: 'toolu_search' }, source: 'l2', call: { id: 'toolu_search', name: 'web_search', input: { q: 'tokio vs async-std' } }, result: { content: 'Tokio is the de facto async runtime for Rust...' } },
+        { type: 'turn.start', ts: 1640, ids: { sessionId: 'sess_child', turnId: 'c2' }, source: 'l1', provider: 'openai', model: 'gpt-4o-mini', request: { messages: [{ role: 'user', content: 'research rust async runtimes' }] } },
+        { type: 'turn.end', ts: 1980, ids: { sessionId: 'sess_child', turnId: 'c2' }, source: 'l1', durationMs: 340, response: { content: [{ type: 'text', text: 'Tokio dominates; async-std is deprecated. smol is a lightweight alternative.' }], stopReason: 'end_turn' } },
+        { type: 'usage', ts: 1980, ids: { sessionId: 'sess_child', turnId: 'c2' }, source: 'l1', usage: { inputTokens: 38, outputTokens: 22 } },
+        { type: 'session.end', ts: 2000, ids: { sessionId: 'sess_child', turnId: 'c2' }, source: 'l1', reason: 'complete' },
+        { type: 'subagent.return', ts: 2010, ids: { sessionId: 'sess_parent', turnId: 'p1' }, source: 'l2', childSessionId: 'sess_child', summary: 'Tokio dominates; async-std deprecated.' },
+        { type: 'turn.start', ts: 2050, ids: { sessionId: 'sess_parent', turnId: 'p2' }, source: 'l1', provider: 'anthropic', model: 'claude-opus-4-7', request: { messages: [{ role: 'user', content: 'research X then summarize' }] } },
+        { type: 'turn.end', ts: 2380, ids: { sessionId: 'sess_parent', turnId: 'p2' }, source: 'l1', durationMs: 330, response: { content: [{ type: 'text', text: 'Per the researcher, Tokio is the standard.' }], stopReason: 'end_turn' } },
+        { type: 'usage', ts: 2380, ids: { sessionId: 'sess_parent', turnId: 'p2' }, source: 'l1', usage: { inputTokens: 41, outputTokens: 12 } },
+        { type: 'session.end', ts: 2400, ids: { sessionId: 'sess_parent', turnId: 'p2' }, source: 'l1', reason: 'complete' },
       ],
     };
 
