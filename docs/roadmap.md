@@ -4,13 +4,13 @@ What's not in v0 yet, and why.
 
 ## AWS Bedrock provider
 
-**Status**: Auth is solved (`signRequest` hook). Wire-format detect for `*/converse` and `*/invoke` is still pending.
+**Status**: Converse API + Sig V4 auth shipped. `/invoke` per-model + Event Stream streaming still pending.
 
-Bedrock has two wire formats:
-- **Converse API** (`/model/<id>/converse`) — universal, OpenAI-style messages.
-- **Per-model API** (`/model/<id>/invoke` or `/model/<id>/invoke-with-response-stream`) — model-specific (Anthropic Claude on Bedrock looks Anthropic-ish; older Claude 2.x uses `prompt` field).
-
-Auth was the hard part — AWS Sig V4 signing — and is now pluggable via the `signRequest` hook. You bring `aws4fetch` or `@aws-sdk/signature-v4`; harnesskit hands you the final body and merges your returned headers:
+What's in:
+- `bedrock-runtime.<region>.amazonaws.com/model/<modelId>/converse` is detected automatically (any region — host regex covers them all).
+- `BedrockRequest` / `BedrockResponse` types, normalize, applyDeny, applyContentRewrites all live in `packages/provider-fetch/src/providers/bedrock/`.
+- Model id is extracted from the URL path (Bedrock URL-encodes `:`; we decode it back).
+- `signRequest` hook handles AWS Sig V4 — bring `aws4fetch` or `@aws-sdk/signature-v4`:
 
 ```ts
 import { AwsClient } from 'aws4fetch';
@@ -22,7 +22,6 @@ const aws = new AwsClient({
 });
 installFetchInterceptor({
   bus,
-  customHosts: { anthropic: ['bedrock-runtime.us-east-1.amazonaws.com'] },
   signRequest: async ({ url, method, headers, body }) => {
     const signed = await aws.sign(new Request(url, { method, headers, body }));
     return { headers: Object.fromEntries(signed.headers) };
@@ -30,11 +29,9 @@ installFetchInterceptor({
 });
 ```
 
-What still needs work for native Bedrock:
-- A wire-format detector that recognizes `bedrock-runtime.*.amazonaws.com` and routes `*/converse` to OpenAI-style normalize, `*/invoke` to a per-model dispatcher (Claude / Llama / Mistral / Titan each need their own).
-- A streaming consumer for `invoke-with-response-stream` (each chunk arrives base64-encoded inside an EventStream framing).
-
-In the meantime, a Bedrock-compatible proxy (LiteLLM, Cloudflare AI Gateway) plus `customHosts` is still the lowest-friction path.
+What's still pending:
+- **`/converse-stream`** — uses AWS Event Stream binary framing (`application/vnd.amazon.eventstream`): 4-byte total length, 4-byte headers length, prelude CRC, headers, JSON payload, message CRC. Currently we drain the body and emit a clear "not yet implemented" error event instead of garbage. Use `/converse` (non-streaming) until this lands.
+- **Per-model `/invoke` API** — `/model/<id>/invoke` and `/model/<id>/invoke-with-response-stream` use model-specific wire formats (Claude / Llama / Mistral / Titan each different). Detection deliberately doesn't claim these — they need their own dispatchers.
 
 ## Google Vertex AI provider
 
@@ -80,10 +77,11 @@ For real prevention (e.g., model emits `shell rm -rf /`, host SDK is going to ac
 
 - Web trace viewer: tree view (parent/child relationships from `subagent.spawn`), comparison mode (two traces side-by-side), search-by-content.
 - Replay: support time-shifting (replay at original wall-clock pace) for live UI demos.
-- Bedrock wire-format detector + per-model dispatcher (auth is now plug-in via `signRequest`).
+- Bedrock `/converse-stream` (Event Stream binary framing) + per-model `/invoke` dispatcher.
 
 ## Recently shipped
 
+- **AWS Bedrock Converse API** — detect, normalize, deny rewrite, content rewrite all live. Pair with `signRequest` for Sig V4. `/converse` (non-streaming) works fully; `/converse-stream` emits a clear "not yet implemented" error event for now. Showcase: `examples/src/showcase-bedrock.ts`.
 - **Anthropic Claude on Vertex** — `:rawPredict` and `:streamRawPredict` URLs on `*-aiplatform.googleapis.com` detect automatically. Model is extracted from the URL path (Vertex Claude doesn't put it in the body). Streaming is tagged from path so `:streamRawPredict` wires through the same SSE consumer as native Anthropic.
 - **Streaming runner** — `runAgentStream` returns an `AsyncGenerator` yielding `text.delta`, `reasoning.delta`, `tool.call.{started,finished}`, `round.end`, and a final `done` chunk with the full `RunAgentResult`. Same harness applies; same buffered result shape at the end. See `docs/runner.md` and `examples/src/demos/12-streaming-runner.ts`.
 - **`signRequest` hook** — let callers compute auth headers from the final serialized body. Recipe in the Bedrock section above; demo at `examples/src/showcase-sign-request.ts`.

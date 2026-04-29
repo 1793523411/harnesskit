@@ -14,6 +14,7 @@ export interface ProviderDetectOpts {
     openai?: readonly string[];
     openrouter?: readonly string[];
     google?: readonly string[];
+    bedrock?: readonly string[];
   };
 }
 

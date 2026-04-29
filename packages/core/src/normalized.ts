@@ -4,6 +4,7 @@ export type Provider =
   | 'openai-responses'
   | 'google'
   | 'openrouter'
+  | 'bedrock'
   | 'unknown';
 
 export interface ToolDefinition {

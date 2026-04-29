@@ -7,6 +7,7 @@ import {
   createTurnId,
 } from '@harnesskit/core';
 import { anthropicProvider } from './providers/anthropic/index.js';
+import { bedrockProvider } from './providers/bedrock/index.js';
 import { geminiProvider } from './providers/gemini/index.js';
 import { openaiResponsesProvider } from './providers/openai-responses/index.js';
 import { openaiProvider, openrouterProvider } from './providers/openai/index.js';
@@ -85,6 +86,7 @@ export type SignRequestHook = (
 const BUILTIN_PROVIDERS: readonly ProviderImpl[] = [
   anthropicProvider,
   openaiResponsesProvider,
+  bedrockProvider,
   geminiProvider,
   openaiProvider,
   openrouterProvider,

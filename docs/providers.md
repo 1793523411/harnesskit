@@ -11,6 +11,7 @@
 | `openai-responses` | `api.openai.com` | `*/v1/responses` | OpenAI Responses API | SSE with named events (`response.*`) | `function_call_output` item |
 | `openrouter` | `openrouter.ai` | `*/chat/completions` | OpenAI-compatible | Same as `openai` | Same as `openai` |
 | `google` | `generativelanguage.googleapis.com`, `*-aiplatform.googleapis.com` | `*:generateContent`, `*:streamGenerateContent` | Gemini API | SSE data lines | `functionResponse` part in user content |
+| `bedrock` | `bedrock-runtime.<region>.amazonaws.com` | `*/converse`, `*/converse-stream` (stream stub for now) | Bedrock Converse | (Event Stream framing — pending) | `toolResult` block in user message |
 
 Path matching uses `endsWith` so proxy gateways with non-standard prefixes are handled (e.g. Volcengine's `/api/v3/chat/completions`, Groq's `/openai/v1/chat/completions`). Hosts are still matched strictly — pass `customHosts` to add proxies.
 
@@ -54,6 +55,7 @@ interface FetchInterceptorOptions {
     openai?: readonly string[];
     openrouter?: readonly string[];
     google?: readonly string[];
+    bedrock?: readonly string[];
   };
 }
 ```
@@ -78,6 +80,8 @@ When the bus denies a `tool.call.requested`, harnesskit stores `{tool_id → rea
 | `openai` | `tool_call_id` | `messages[].tool_call_id` (role `tool`) |
 | `openai-responses` | `call_id` | `input[].call_id` (item type `function_call_output`) |
 | `openrouter` | `tool_call_id` | (same as `openai`) |
+| `bedrock` | `toolUseId` | `messages[].content[].toolResult.toolUseId` (status set to `error`) |
+| `google` | `id` (or synthesized `gemini_fc_<name>`) | `contents[].parts[].functionResponse` |
 
 After rewriting, the entry is removed from the deny store — re-emission of the same `tool_use_id` (rare but possible) won't re-deny.
 
