@@ -19,6 +19,14 @@
     "showcase-multi-tenant": "tsx src/showcase-multi-tenant.ts",
     "showcase-runner": "tsx src/showcase-runner.ts",
     "showcases": "pnpm showcase && pnpm showcase-tokens && pnpm showcase-args && pnpm showcase-hostname && pnpm showcase-pii && pnpm showcase-multi-tenant && pnpm showcase-runner",
+    "demo:reasoning": "tsx --env-file=.env src/demos/01-reasoning-showdown.ts",
+    "demo:cross-provider-tools": "tsx --env-file=.env src/demos/02-cross-provider-tools.ts",
+    "demo:cost": "tsx --env-file=.env src/demos/03-cost-tracking.ts",
+    "demo:otel": "tsx --env-file=.env src/demos/04-otel-console.ts",
+    "demo:trace-file": "tsx --env-file=.env src/demos/05-trace-to-file.ts",
+    "demo:replay": "tsx --env-file=.env src/demos/06-replay-strict.ts",
+    "demo:approval": "tsx --env-file=.env src/demos/07-approval-stdin.ts",
+    "demo:concurrent": "tsx --env-file=.env src/demos/08-concurrent-stress.ts",
     "all": "pnpm quickstart && pnpm openai-quickstart && pnpm policy-and-eval && pnpm replay-eval",
     "typecheck": "tsc --noEmit",
     "build": "echo 'examples are run with tsx, no build needed'",
@@ -30,7 +38,8 @@
     "@harnesskit/policy": "workspace:*",
     "@harnesskit/eval": "workspace:*",
     "@harnesskit/provider-fetch": "workspace:*",
-    "@harnesskit/runner": "workspace:*"
+    "@harnesskit/runner": "workspace:*",
+    "@harnesskit/otel": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.19.0"
