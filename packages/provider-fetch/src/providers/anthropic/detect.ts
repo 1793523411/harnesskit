@@ -5,6 +5,14 @@ export interface AnthropicDetectOptions {
   customHosts?: readonly string[];
 }
 
+const isVertexAnthropicHost = (host: string): boolean =>
+  /^[a-z0-9-]+-aiplatform\.googleapis\.com$/.test(host);
+
+const isVertexAnthropicPath = (pathname: string): boolean =>
+  /\/publishers\/anthropic\/models\/[^:]+:(rawPredict|streamRawPredict)$/.test(pathname);
+
+const isMessagesPath = (pathname: string): boolean => pathname.endsWith('/v1/messages');
+
 export const detectAnthropic = (
   input: RequestInfo | URL,
   init: RequestInit | undefined,
@@ -22,7 +30,27 @@ export const detectAnthropic = (
     return false;
   }
 
-  if (!url.pathname.endsWith('/v1/messages')) return false;
+  // Vertex AI hosts Anthropic Claude under :rawPredict / :streamRawPredict.
+  // The path-detect is sufficient since the regex requires "/publishers/anthropic/".
+  if (isVertexAnthropicHost(url.host) && isVertexAnthropicPath(url.pathname)) return true;
+
+  if (!isMessagesPath(url.pathname)) return false;
   const hosts = opts.customHosts ? new Set([...DEFAULT_HOSTS, ...opts.customHosts]) : DEFAULT_HOSTS;
   return hosts.has(url.host);
+};
+
+/**
+ * Vertex Claude URLs end with `:streamRawPredict` for streaming. We use this
+ * to override the request's `stream` field if the body doesn't have one.
+ */
+export const isVertexAnthropicStreamPath = (pathname: string): boolean =>
+  pathname.endsWith(':streamRawPredict');
+
+/**
+ * Extracts the model id from a Vertex Anthropic path. Vertex Claude doesn't
+ * carry `model` in the request body — model lives in the URL path.
+ */
+export const extractVertexAnthropicModel = (pathname: string): string | undefined => {
+  const m = pathname.match(/\/publishers\/anthropic\/models\/([^:]+):/);
+  return m ? m[1] : undefined;
 };

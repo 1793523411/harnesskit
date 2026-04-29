@@ -6,10 +6,11 @@
 
 | Provider tag | Default host | Path match | Wire format | Streaming | Deny rewrite target |
 | --- | --- | --- | --- | --- | --- |
-| `anthropic` | `api.anthropic.com` | `*/v1/messages` | Anthropic Messages | SSE with named events | `tool_result` block in user message |
+| `anthropic` | `api.anthropic.com`, `*-aiplatform.googleapis.com` | `*/v1/messages`, `*/publishers/anthropic/models/*:rawPredict`, `*:streamRawPredict` | Anthropic Messages | SSE with named events | `tool_result` block in user message |
 | `openai` | `api.openai.com` | `*/chat/completions` | OpenAI Chat Completions | SSE data lines (+ `[DONE]`) | `role: 'tool'` message |
 | `openai-responses` | `api.openai.com` | `*/v1/responses` | OpenAI Responses API | SSE with named events (`response.*`) | `function_call_output` item |
 | `openrouter` | `openrouter.ai` | `*/chat/completions` | OpenAI-compatible | Same as `openai` | Same as `openai` |
+| `google` | `generativelanguage.googleapis.com`, `*-aiplatform.googleapis.com` | `*:generateContent`, `*:streamGenerateContent` | Gemini API | SSE data lines | `functionResponse` part in user content |
 
 Path matching uses `endsWith` so proxy gateways with non-standard prefixes are handled (e.g. Volcengine's `/api/v3/chat/completions`, Groq's `/openai/v1/chat/completions`). Hosts are still matched strictly — pass `customHosts` to add proxies.
 

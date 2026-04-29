@@ -38,25 +38,18 @@ In the meantime, a Bedrock-compatible proxy (LiteLLM, Cloudflare AI Gateway) plu
 
 ## Google Vertex AI provider
 
-**Status**: Partially works through the existing Gemini provider.
+**Status**: Both Gemini and Anthropic Claude on Vertex route automatically.
 
-Vertex's Gemini endpoint:
-```
-https://<region>-aiplatform.googleapis.com/v1/projects/<id>/publishers/google/models/<model>:generateContent
-```
+- **Gemini on Vertex** (`:generateContent` / `:streamGenerateContent`) is picked up by the Gemini provider. Add the regional hostname to `customHosts.google`:
+  ```ts
+  installFetchInterceptor({
+    bus,
+    customHosts: { google: ['us-central1-aiplatform.googleapis.com'] },
+  });
+  ```
+- **Anthropic Claude on Vertex** (`:rawPredict` / `:streamRawPredict` under `/publishers/anthropic/models/...`) is detected automatically — no `customHosts` entry needed; the regex `^[a-z0-9-]+-aiplatform\.googleapis\.com$` matches any region. Vertex Claude doesn't carry `model` in the request body (it's in the URL); harnesskit pulls it out for you and `turn.start.model` reflects it.
 
-The path ends with `:generateContent`, which the Gemini provider already detects. Add the regional hostname to customHosts:
-
-```ts
-installFetchInterceptor({
-  bus,
-  customHosts: { google: ['us-central1-aiplatform.googleapis.com'] },
-});
-```
-
-What's missing: GCP auth via OAuth2 / service account access tokens. Use the Google Auth Library to obtain a Bearer token and add it to your fetch headers — harnesskit doesn't get involved in auth.
-
-Anthropic Claude on Vertex uses a similar URL pattern but with `:rawPredict` (different path). Not yet detected by harnesskit. Needs its own provider entry.
+Auth in both cases: bring your own GCP OAuth2 / service-account access token in the request `Authorization` header — harnesskit doesn't fetch tokens for you. Use the Google Auth Library (`google-auth-library`) and inject the Bearer header from your fetch wrapper.
 
 ## LangGraph adapter — full StateGraph integration
 
@@ -87,11 +80,11 @@ For real prevention (e.g., model emits `shell rm -rf /`, host SDK is going to ac
 
 - Web trace viewer: tree view (parent/child relationships from `subagent.spawn`), comparison mode (two traces side-by-side), search-by-content.
 - Replay: support time-shifting (replay at original wall-clock pace) for live UI demos.
-- Anthropic Claude on Vertex (`:rawPredict`) — Gemini-style `:generateContent` already routes; Claude on Vertex uses a different path so still needs its own provider entry.
 - Bedrock wire-format detector + per-model dispatcher (auth is now plug-in via `signRequest`).
 
 ## Recently shipped
 
+- **Anthropic Claude on Vertex** — `:rawPredict` and `:streamRawPredict` URLs on `*-aiplatform.googleapis.com` detect automatically. Model is extracted from the URL path (Vertex Claude doesn't put it in the body). Streaming is tagged from path so `:streamRawPredict` wires through the same SSE consumer as native Anthropic.
 - **Streaming runner** — `runAgentStream` returns an `AsyncGenerator` yielding `text.delta`, `reasoning.delta`, `tool.call.{started,finished}`, `round.end`, and a final `done` chunk with the full `RunAgentResult`. Same harness applies; same buffered result shape at the end. See `docs/runner.md` and `examples/src/demos/12-streaming-runner.ts`.
 - **`signRequest` hook** — let callers compute auth headers from the final serialized body. Recipe in the Bedrock section above; demo at `examples/src/showcase-sign-request.ts`.
 - **Multi-rewriter chains + exception fallback** — `rewriteToolResults` accepts a single rewriter or an array. Each runs in order, output of one feeds the next. A throw is caught, emitted as an `error` event, and treated as no-op for that block. Showcase at `examples/src/showcase-rewriter-chain.ts`.

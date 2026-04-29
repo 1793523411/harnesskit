@@ -284,6 +284,121 @@ describe('Anthropic L1 interceptor', () => {
     expect(cancelCalled).toBe(true);
   });
 
+  it('routes Vertex Claude (:rawPredict) and extracts model from URL path', async () => {
+    const bus = new EventBus();
+    const events = collectEvents(bus);
+    const target = {
+      fetch: async () =>
+        mockResponse({
+          id: 'msg_v',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-sonnet-4@20250514',
+          content: [{ type: 'text', text: 'hello from vertex' }],
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 4, output_tokens: 3 },
+        }),
+    };
+    const dispose = installFetchInterceptor({ bus, target });
+
+    await target.fetch(
+      'https://us-east5-aiplatform.googleapis.com/v1/projects/my-proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:rawPredict',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer host-supplied-gcp-token',
+        },
+        // Notice: no `model` field — Vertex Claude puts the model in the URL.
+        body: JSON.stringify({
+          anthropic_version: 'vertex-2023-10-16',
+          max_tokens: 64,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      },
+    );
+    dispose();
+
+    const turnStart = events.find((e) => e.type === 'turn.start');
+    if (turnStart?.type !== 'turn.start') throw new Error('expected turn.start');
+    expect(turnStart.provider).toBe('anthropic');
+    expect(turnStart.model).toBe('claude-sonnet-4@20250514');
+  });
+
+  it('routes :streamRawPredict as a streaming Vertex request', async () => {
+    const bus = new EventBus();
+    const events = collectEvents(bus);
+    const target = {
+      fetch: async () => {
+        const enc = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            const send = (event: string, data: unknown) =>
+              controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+            send('message_start', {
+              type: 'message_start',
+              message: {
+                id: 'msg_v_s',
+                model: 'claude-sonnet-4@20250514',
+                usage: { input_tokens: 3, output_tokens: 0 },
+              },
+            });
+            send('content_block_start', {
+              type: 'content_block_start',
+              index: 0,
+              content_block: { type: 'text', text: '' },
+            });
+            send('content_block_delta', {
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'text_delta', text: 'streamed' },
+            });
+            send('content_block_stop', { type: 'content_block_stop', index: 0 });
+            send('message_delta', {
+              type: 'message_delta',
+              delta: { stop_reason: 'end_turn' },
+              usage: { output_tokens: 1 },
+            });
+            send('message_stop', { type: 'message_stop' });
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      },
+    };
+    const dispose = installFetchInterceptor({ bus, target });
+    const res = await target.fetch(
+      'https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          anthropic_version: 'vertex-2023-10-16',
+          max_tokens: 64,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      },
+    );
+    await res.text();
+    await new Promise((r) => setTimeout(r, 30));
+    dispose();
+
+    const turnStart = events.find((e) => e.type === 'turn.start');
+    if (turnStart?.type !== 'turn.start') throw new Error('expected turn.start');
+    expect(turnStart.provider).toBe('anthropic');
+    expect(turnStart.model).toBe('claude-sonnet-4@20250514');
+    const turnEnd = events.find((e) => e.type === 'turn.end');
+    if (turnEnd?.type !== 'turn.end') throw new Error('expected turn.end');
+    const text = turnEnd.response?.content
+      ?.filter((b) => b.type === 'text')
+      .map((b) => (b as { text: string }).text)
+      .join('');
+    expect(text).toBe('streamed');
+  });
+
   it('invokes signRequest with the final body and merges returned headers', async () => {
     const bus = new EventBus();
     let observedHeaders: Record<string, string> = {};
