@@ -175,7 +175,10 @@ const PII_REGEXES: Record<PiiPatternName, RegExp> = {
   email: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
   ssn: /\b\d{3}-\d{2}-\d{4}\b/,
   creditcard: /\b(?:\d[ -]?){13,19}\b/,
-  phone: /\b\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b/,
+  // Negative lookbehind for digit/dash so we don't grab middle of "1234567890123";
+  // negative lookahead for digit so trailing digits don't extend the match.
+  // Allows optional parens around area code: "(415) 555-0142", "415-555-0142", etc.
+  phone: /(?<![\d-])\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}(?!\d)/,
   ipv4: /\b(?:\d{1,3}\.){3}\d{1,3}\b/,
 };
 
@@ -334,6 +337,57 @@ export interface OutputPiiScanOptions {
   tools?: readonly Pattern[];
   name?: string;
 }
+
+export interface RedactPiiInToolResultsOptions {
+  patterns?: readonly (PiiPatternName | RegExp)[];
+  /** What to swap matches with. Default: "[REDACTED]". */
+  replacement?: string;
+  /**
+   * Optional filter — toolUseId-based. If a `lookup` is given, the rewriter
+   * can short-circuit calls it doesn't care about. Default: rewrite all.
+   */
+  lookup?: (ctx: { toolUseId: string }) => boolean;
+}
+
+/**
+ * Returns a tool-result content rewriter for use with
+ * `installFetchInterceptor({ rewriteToolResults })`. Actively redacts PII
+ * matches in outgoing-from-tool content before the model sees it.
+ *
+ * Unlike {@link outputPiiScan} (audit-only) this *modifies the wire payload*.
+ * Pair with {@link piiScan} to also block PII *into* tool calls.
+ */
+export const redactPiiInToolResults = (
+  opts: RedactPiiInToolResultsOptions = {},
+): ((content: string, ctx: { toolUseId: string }) => string | undefined) => {
+  const patternList: readonly (PiiPatternName | RegExp)[] = opts.patterns ?? [
+    'email',
+    'ssn',
+    'creditcard',
+  ];
+  const withGlobal = (re: RegExp): RegExp => {
+    const flags = [...new Set(`${re.flags}g`.split(''))].join('');
+    return new RegExp(re.source, flags);
+  };
+  const regexes: RegExp[] = patternList.map((p) =>
+    withGlobal(p instanceof RegExp ? p : PII_REGEXES[p]),
+  );
+  const replacement = opts.replacement ?? '[REDACTED]';
+  return (content, ctx) => {
+    if (opts.lookup && !opts.lookup(ctx)) return undefined;
+    let out = content;
+    let hit = false;
+    for (const re of regexes) {
+      if (re.test(out)) {
+        // Reset regex state — we're about to use replace which scans from 0
+        re.lastIndex = 0;
+        out = out.replace(re, replacement);
+        hit = true;
+      }
+    }
+    return hit ? out : undefined;
+  };
+};
 
 /**
  * Like {@link piiScan} but observes outgoing-from-tool content (i.e. what

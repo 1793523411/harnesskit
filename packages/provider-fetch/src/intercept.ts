@@ -10,11 +10,16 @@ import { anthropicProvider } from './providers/anthropic/index.js';
 import { geminiProvider } from './providers/gemini/index.js';
 import { openaiResponsesProvider } from './providers/openai-responses/index.js';
 import { openaiProvider, openrouterProvider } from './providers/openai/index.js';
-import type { ProviderDetectOpts, ProviderImpl, ProviderTag } from './providers/types.js';
+import type {
+  ProviderDetectOpts,
+  ProviderImpl,
+  ProviderTag,
+  ToolResultRewriter,
+} from './providers/types.js';
 import { type RedactOption, redactHeaders } from './redact.js';
 import { type InterceptorState, createState } from './state.js';
 
-export type { ProviderTag } from './providers/types.js';
+export type { ProviderTag, ToolResultRewriter } from './providers/types.js';
 
 export interface FetchInterceptorOptions {
   bus: EventBus;
@@ -30,6 +35,14 @@ export interface FetchInterceptorOptions {
   includeRaw?: boolean;
   /** Provider-specific overrides. */
   customHosts?: ProviderDetectOpts['customHosts'];
+  /**
+   * Active wire-level rewriter for outgoing tool-result content. Applied after
+   * deny rewrites and before serialization. Returning `undefined` from the
+   * rewriter leaves a block unchanged. Returning a string replaces the
+   * tool-result content the model is about to see. See
+   * `redactPiiInToolResults` in @harnesskit/policy.
+   */
+  rewriteToolResults?: ToolResultRewriter;
 }
 
 const BUILTIN_PROVIDERS: readonly ProviderImpl[] = [
@@ -196,7 +209,11 @@ export const installFetchInterceptor = (opts: FetchInterceptorOptions): (() => v
 
     const { rewritten, rewroteIds } = provider.applyDeny(parsed, ctx.state.deniedCalls);
     for (const id of rewroteIds) ctx.state.deniedCalls.delete(id);
-    const outgoing = rewritten;
+    let outgoing: unknown = rewritten;
+    if (opts.rewriteToolResults && provider.applyContentRewrites) {
+      const result = provider.applyContentRewrites(outgoing, opts.rewriteToolResults);
+      outgoing = result.rewritten;
+    }
 
     const startEvt: AgentEvent = {
       type: 'turn.start',

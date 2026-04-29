@@ -234,6 +234,147 @@ describe('Gemini L1 interceptor', () => {
     expect(tool.call.input).toEqual({ cmd: 'ls' });
   });
 
+  it('aborts mid-stream when policy denies a functionCall', async () => {
+    const bus = new EventBus();
+    bus.use({
+      on: (e, ctx) => {
+        if (e.type === 'tool.call.requested' && e.call.name === 'shell') {
+          ctx.deny('shell disabled', 'no-shell');
+        }
+      },
+    });
+    const events = collectEvents(bus);
+    let cancelCalled = false;
+    let lateChunkProcessed = false;
+    const target = {
+      fetch: async () => {
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            const enc = new TextEncoder();
+            const send = (chunk: unknown) =>
+              controller.enqueue(enc.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+            send({
+              candidates: [
+                {
+                  content: {
+                    role: 'model',
+                    parts: [
+                      { functionCall: { id: 'fc_x', name: 'shell', args: { cmd: 'rm -rf' } } },
+                    ],
+                  },
+                },
+              ],
+              modelVersion: 'gemini-1.5-pro',
+            });
+            // Give the consumer a tick to process + abort. If the abort isn't
+            // wired up, this late chunk will be processed and we'll see it in
+            // the assembled response.
+            await new Promise((r) => setTimeout(r, 10));
+            send({
+              candidates: [
+                {
+                  content: { role: 'model', parts: [{ text: 'should-not-arrive' }] },
+                  finishReason: 'STOP',
+                },
+              ],
+            });
+            lateChunkProcessed = true;
+            controller.close();
+          },
+          cancel() {
+            cancelCalled = true;
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      },
+    };
+    const dispose = installFetchInterceptor({ bus, target });
+    const response = await target.fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:streamGenerateContent?alt=sse',
+      {
+        method: 'POST',
+        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'do it' }] }] }),
+      },
+    );
+    await response.text();
+    await new Promise((r) => setTimeout(r, 50));
+    dispose();
+
+    const types = events.map((e) => e.type);
+    expect(types).toContain('tool.call.requested');
+    expect(types).toContain('tool.call.denied');
+    expect(cancelCalled).toBe(true);
+    void lateChunkProcessed; // we don't strictly assert this — the source's start() may complete after cancel
+    // Most importantly, only one tool.call.requested even if a late chunk
+    // tries to add another functionCall.
+    const calls = events.filter((e) => e.type === 'tool.call.requested');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('actively redacts strings inside functionResponse via rewriteToolResults', async () => {
+    const bus = new EventBus();
+    let observedReq:
+      | { contents: Array<{ role?: string; parts?: Array<Record<string, unknown>> }> }
+      | undefined;
+    const target = {
+      fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+        observedReq = JSON.parse(init?.body as string);
+        return mockResponse({
+          candidates: [
+            { content: { role: 'model', parts: [{ text: 'noted' }] }, finishReason: 'STOP' },
+          ],
+        });
+      },
+    };
+    const dispose = installFetchInterceptor({
+      bus,
+      target,
+      rewriteToolResults: (content) =>
+        content.replace(/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/g, '[email]'),
+    });
+    await target.fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          contents: [
+            { role: 'user', parts: [{ text: 'lookup alice' }] },
+            {
+              role: 'model',
+              parts: [{ functionCall: { id: 'fc_x', name: 'lookup', args: { q: 'alice' } } }],
+            },
+            {
+              role: 'user',
+              parts: [
+                {
+                  functionResponse: {
+                    id: 'fc_x',
+                    name: 'lookup',
+                    response: { name: 'Alice', email: 'alice@example.com', meta: { tier: 'vip' } },
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    );
+    dispose();
+
+    expect(observedReq).toBeDefined();
+    const last = observedReq?.contents.at(-1);
+    const fr = (last?.parts?.[0] as { functionResponse?: { response?: Record<string, unknown> } })
+      ?.functionResponse;
+    expect(fr?.response).toMatchObject({
+      name: 'Alice',
+      email: '[email]',
+      meta: { tier: 'vip' },
+    });
+  });
+
   it('rewrites functionResponse on next request when functionCall was denied', async () => {
     const bus = new EventBus();
     bus.use({

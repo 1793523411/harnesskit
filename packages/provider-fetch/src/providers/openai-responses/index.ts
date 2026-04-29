@@ -1,5 +1,5 @@
 import type { ProviderImpl } from '../types.js';
-import { applyDenyRewrites } from './deny.js';
+import { applyContentRewrites, applyDenyRewrites } from './deny.js';
 import { detectOpenAIResponses } from './detect.js';
 import {
   extractToolCalls,
@@ -34,4 +34,5 @@ export const openaiResponsesProvider: ProviderImpl = {
   normalizeResponse: (res) => normalizeResponse(res as ResponsesResponse),
   extractToolCalls: (res) => extractToolCalls(res as ResponsesResponse),
   extractUsage: (res) => extractUsage((res as ResponsesResponse).usage),
+  applyContentRewrites: (req, rewriter) => applyContentRewrites(req as ResponsesRequest, rewriter),
 };

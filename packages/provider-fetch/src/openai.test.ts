@@ -183,6 +183,52 @@ describe('OpenAI Chat Completions L1', () => {
     expect(toolEvt.call.input).toEqual({ cmd: 'ls' });
   });
 
+  it('actively rewrites tool-message content via rewriteToolResults', async () => {
+    const bus = new EventBus();
+    let observedBody: { messages: Array<{ role: string; content: unknown }> } | undefined;
+    const target = {
+      fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+        observedBody = JSON.parse(init?.body as string);
+        return mockResponse({
+          id: 'chatcmpl_y',
+          object: 'chat.completion',
+          model: 'gpt-4o',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'noted' } }],
+        });
+      },
+    };
+    const dispose = installFetchInterceptor({
+      bus,
+      target,
+      rewriteToolResults: (content) => content.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[SSN]'),
+    });
+    await target.fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'user', content: 'lookup' },
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              { id: 'call_R', type: 'function', function: { name: 'lookup', arguments: '{}' } },
+            ],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_R',
+            content: 'Found: SSN 123-45-6789, status=ok',
+          },
+        ],
+      }),
+    });
+    dispose();
+
+    const toolMsg = observedBody?.messages.find((m) => m.role === 'tool');
+    expect(toolMsg?.content).toBe('Found: SSN [SSN], status=ok');
+  });
+
   it('rewrites tool messages on the next request when a tool_call was denied', async () => {
     const bus = new EventBus();
     bus.use({

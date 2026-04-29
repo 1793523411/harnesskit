@@ -29,6 +29,17 @@ export interface ConsumeStreamOpts {
 }
 
 /**
+ * Applied to outgoing tool-result content blocks before the wire layer
+ * serializes the request. Returning `undefined` leaves content unchanged.
+ * Returning a string replaces the content. Used by builtins like
+ * `redactPiiInToolResults` to actively scrub data flowing back to the model.
+ */
+export type ToolResultRewriter = (
+  content: string,
+  ctx: { toolUseId: string },
+) => string | undefined;
+
+/**
  * Provider implementations are opaque at the registry level: requests and
  * responses are typed `unknown` so the registry can hold heterogeneous providers
  * without generics ceremony. Each impl casts internally.
@@ -64,4 +75,13 @@ export interface ProviderImpl {
   normalizeResponse(res: unknown): NormalizedResponse;
   extractToolCalls(res: unknown): ToolCall[];
   extractUsage(res: unknown): UsageInfo | undefined;
+  /**
+   * Optional. Walks the parsed request and applies the rewriter to each
+   * outgoing tool-result content block. Implemented by Anthropic, OpenAI Chat,
+   * OpenAI Responses, and Gemini.
+   */
+  applyContentRewrites?(
+    req: unknown,
+    rewriter: ToolResultRewriter,
+  ): { rewritten: unknown; rewroteIds: string[] };
 }

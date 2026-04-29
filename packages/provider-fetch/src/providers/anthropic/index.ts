@@ -1,5 +1,5 @@
 import type { ProviderImpl } from '../types.js';
-import { applyDenyRewrites } from './deny.js';
+import { applyContentRewrites, applyDenyRewrites } from './deny.js';
 import { detectAnthropic } from './detect.js';
 import {
   extractToolCalls,
@@ -47,4 +47,5 @@ export const anthropicProvider: ProviderImpl = {
   normalizeResponse: (res) => normalizeResponse(res as AnthropicResponse),
   extractToolCalls: (res) => extractToolCalls(res as AnthropicResponse),
   extractUsage: (res) => extractUsage((res as AnthropicResponse).usage),
+  applyContentRewrites: (req, rewriter) => applyContentRewrites(req as AnthropicRequest, rewriter),
 };

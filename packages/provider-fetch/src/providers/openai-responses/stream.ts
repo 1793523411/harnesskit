@@ -1,4 +1,6 @@
+import type { ToolCall } from '@harnesskit/core';
 import { parseSseStream } from '../../sse.js';
+import type { ConsumeStreamOpts } from '../types.js';
 import type {
   ResponsesFunctionCallItem,
   ResponsesItem,
@@ -35,8 +37,26 @@ const safeParse = (s: string): AnyJson | undefined => {
   }
 };
 
-const processEvent = (eventName: string | undefined, data: AnyJson, accum: AccumState): void => {
-  if (!eventName) return;
+const safeParseArgs = (s: string | undefined): unknown => {
+  if (!s) return {};
+  try {
+    return JSON.parse(s);
+  } catch {
+    return {};
+  }
+};
+
+/**
+ * Mutates `accum` in place. When a `response.output_item.done` event arrives
+ * for a `function_call` item, returns the assembled tool call so the caller
+ * can fire the eager onToolCall hook.
+ */
+const processEvent = (
+  eventName: string | undefined,
+  data: AnyJson,
+  accum: AccumState,
+): { completedToolCall?: ToolCall } => {
+  if (!eventName) return {};
 
   switch (eventName) {
     case 'response.created':
@@ -46,39 +66,56 @@ const processEvent = (eventName: string | undefined, data: AnyJson, accum: Accum
         if (typeof r.id === 'string') accum.id = r.id;
         if (typeof r.model === 'string') accum.model = r.model;
       }
-      break;
+      return {};
     }
     case 'response.output_item.added': {
       const idx = data.output_index as number | undefined;
       const item = data.item as ResponsesItem | undefined;
-      if (idx === undefined || !item) break;
+      if (idx === undefined || !item) return {};
       accum.outputItems.set(idx, structuredClone(item));
       if (item.type === 'message') accum.textBuffers.set(idx, []);
       if (item.type === 'function_call') accum.argsBuffers.set(idx, []);
-      break;
+      return {};
     }
     case 'response.output_text.delta': {
       const idx = data.output_index as number | undefined;
       const delta = data.delta as string | undefined;
-      if (idx === undefined || typeof delta !== 'string') break;
+      if (idx === undefined || typeof delta !== 'string') return {};
       const buf = accum.textBuffers.get(idx);
       if (buf) buf.push(delta);
-      break;
+      return {};
     }
     case 'response.function_call_arguments.delta': {
       const idx = data.output_index as number | undefined;
       const delta = data.delta as string | undefined;
-      if (idx === undefined || typeof delta !== 'string') break;
+      if (idx === undefined || typeof delta !== 'string') return {};
       const buf = accum.argsBuffers.get(idx);
       if (buf) buf.push(delta);
-      break;
+      return {};
     }
     case 'response.output_item.done': {
       const idx = data.output_index as number | undefined;
       const item = data.item as ResponsesItem | undefined;
-      if (idx === undefined || !item) break;
+      if (idx === undefined || !item) return {};
       accum.outputItems.set(idx, structuredClone(item));
-      break;
+      if (item.type === 'function_call') {
+        const fc = item as ResponsesFunctionCallItem;
+        // Prefer the args string the server gave us in the .done item; fall
+        // back to the buffered deltas if the .done item came back with empty
+        // arguments.
+        const argsString =
+          fc.arguments && fc.arguments !== ''
+            ? fc.arguments
+            : (accum.argsBuffers.get(idx) ?? []).join('');
+        return {
+          completedToolCall: {
+            id: fc.call_id,
+            name: fc.name,
+            input: safeParseArgs(argsString) as ToolCall['input'],
+          },
+        };
+      }
+      return {};
     }
     case 'response.completed': {
       const r = data.response as AnyJson | undefined;
@@ -87,9 +124,10 @@ const processEvent = (eventName: string | undefined, data: AnyJson, accum: Accum
         const usage = r.usage as ResponsesUsage | undefined;
         if (usage) accum.usage = usage;
       }
-      break;
+      return {};
     }
   }
+  return {};
 };
 
 const finalizeItem = (idx: number, item: ResponsesItem, accum: AccumState): ResponsesItem => {
@@ -139,8 +177,16 @@ const finalize = (accum: AccumState): ResponsesResponse => {
 
 export const consumeOpenAIResponsesStream = async (
   stream: ReadableStream<Uint8Array>,
-): Promise<{ response: ResponsesResponse; errored: Error | undefined }> => {
+  opts?: ConsumeStreamOpts,
+): Promise<{
+  response: ResponsesResponse;
+  errored: Error | undefined;
+  eagerlyEmittedCallIds?: string[];
+  aborted?: boolean;
+}> => {
   const accum = createAccum();
+  const eagerlyEmittedCallIds: string[] = [];
+  let aborted = false;
   let errored: Error | undefined;
   try {
     const reader = parseSseStream(stream).getReader();
@@ -148,10 +194,28 @@ export const consumeOpenAIResponsesStream = async (
       const { done, value } = await reader.read();
       if (done) break;
       const data = safeParse(value.data);
-      if (data) processEvent(value.event, data, accum);
+      if (!data) continue;
+      const { completedToolCall } = processEvent(value.event, data, accum);
+      if (completedToolCall && opts?.onToolCall) {
+        eagerlyEmittedCallIds.push(completedToolCall.id);
+        const decision = await opts.onToolCall(completedToolCall);
+        if (decision.abort) {
+          aborted = true;
+          await reader.cancel().catch(() => undefined);
+          break;
+        }
+      }
     }
   } catch (err) {
     errored = err instanceof Error ? err : new Error(String(err));
   }
-  return { response: finalize(accum), errored };
+  const out: {
+    response: ResponsesResponse;
+    errored: Error | undefined;
+    eagerlyEmittedCallIds?: string[];
+    aborted?: boolean;
+  } = { response: finalize(accum), errored };
+  if (eagerlyEmittedCallIds.length > 0) out.eagerlyEmittedCallIds = eagerlyEmittedCallIds;
+  if (aborted) out.aborted = true;
+  return out;
 };

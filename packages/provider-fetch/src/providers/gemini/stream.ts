@@ -1,4 +1,6 @@
+import type { ToolCall } from '@harnesskit/core';
 import { parseSseStream } from '../../sse.js';
+import type { ConsumeStreamOpts } from '../types.js';
 import type {
   GeminiCandidate,
   GeminiPart,
@@ -34,7 +36,20 @@ const safeParse = (s: string): AnyJson | undefined => {
   }
 };
 
-const processChunk = (data: AnyJson, accum: AccumState): void => {
+/**
+ * Mutates `accum` in place. Returns the keys (Map keys, see below) of any
+ * function-call entries that became newly fully-formed in this chunk — caller
+ * can fire the eager onToolCall hook for each.
+ *
+ * In Gemini, a `functionCall` part arrives complete inside a single chunk's
+ * `content.parts[]` (args are not split across deltas). So a "new key" in this
+ * chunk == a complete tool call ready for mid-stream gating.
+ */
+const processChunk = (
+  data: AnyJson,
+  accum: AccumState,
+): { newCallKeys: string[] } => {
+  const newCallKeys: string[] = [];
   if (typeof data.modelVersion === 'string' && !accum.modelVersion) {
     accum.modelVersion = data.modelVersion;
   }
@@ -43,12 +58,12 @@ const processChunk = (data: AnyJson, accum: AccumState): void => {
 
   const candidates = data.candidates as Array<AnyJson> | undefined;
   const candidate = candidates?.[0];
-  if (!candidate) return;
+  if (!candidate) return { newCallKeys };
   if (typeof candidate.finishReason === 'string') {
     accum.finishReason = candidate.finishReason as string;
   }
   const content = candidate.content as { parts?: GeminiPart[] } | undefined;
-  if (!content?.parts) return;
+  if (!content?.parts) return { newCallKeys };
   for (const p of content.parts) {
     if (typeof (p as GeminiTextPart).text === 'string') {
       const tp = p as GeminiTextPart;
@@ -72,9 +87,11 @@ const processChunk = (data: AnyJson, accum: AccumState): void => {
         };
         if (fc.id !== undefined) entry.id = fc.id;
         accum.functionCalls.set(key, entry);
+        newCallKeys.push(key);
       }
     }
   }
+  return { newCallKeys };
 };
 
 const finalize = (accum: AccumState): GeminiResponse => {
@@ -105,10 +122,26 @@ const finalize = (accum: AccumState): GeminiResponse => {
   return out;
 };
 
+const buildEagerToolCall = (
+  key: string,
+  fc: { name: string; args: unknown; id?: string },
+): ToolCall => {
+  const id = fc.id ?? key;
+  return { id, name: fc.name, input: (fc.args ?? {}) as ToolCall['input'] };
+};
+
 export const consumeGeminiStream = async (
   stream: ReadableStream<Uint8Array>,
-): Promise<{ response: GeminiResponse; errored: Error | undefined }> => {
+  opts?: ConsumeStreamOpts,
+): Promise<{
+  response: GeminiResponse;
+  errored: Error | undefined;
+  eagerlyEmittedCallIds?: string[];
+  aborted?: boolean;
+}> => {
   const accum = createAccum();
+  const eagerlyEmittedCallIds: string[] = [];
+  let aborted = false;
   let errored: Error | undefined;
   try {
     const reader = parseSseStream(stream).getReader();
@@ -116,10 +149,38 @@ export const consumeGeminiStream = async (
       const { done, value } = await reader.read();
       if (done) break;
       const data = safeParse(value.data);
-      if (data) processChunk(data, accum);
+      if (!data) continue;
+      const { newCallKeys } = processChunk(data, accum);
+      if (newCallKeys.length > 0 && opts?.onToolCall) {
+        let didAbort = false;
+        for (const key of newCallKeys) {
+          const fc = accum.functionCalls.get(key);
+          if (!fc) continue;
+          const call = buildEagerToolCall(key, fc);
+          eagerlyEmittedCallIds.push(call.id);
+          const decision = await opts.onToolCall(call);
+          if (decision.abort) {
+            aborted = true;
+            didAbort = true;
+            break;
+          }
+        }
+        if (didAbort) {
+          await reader.cancel().catch(() => undefined);
+          break;
+        }
+      }
     }
   } catch (err) {
     errored = err instanceof Error ? err : new Error(String(err));
   }
-  return { response: finalize(accum), errored };
+  const out: {
+    response: GeminiResponse;
+    errored: Error | undefined;
+    eagerlyEmittedCallIds?: string[];
+    aborted?: boolean;
+  } = { response: finalize(accum), errored };
+  if (eagerlyEmittedCallIds.length > 0) out.eagerlyEmittedCallIds = eagerlyEmittedCallIds;
+  if (aborted) out.aborted = true;
+  return out;
 };

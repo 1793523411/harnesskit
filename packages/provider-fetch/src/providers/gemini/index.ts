@@ -1,5 +1,5 @@
 import type { ProviderImpl } from '../types.js';
-import { applyDenyRewrites } from './deny.js';
+import { applyContentRewrites, applyDenyRewrites } from './deny.js';
 import { detectGemini, extractGeminiModelFromPath, isStreamPath } from './detect.js';
 import {
   extractToolCalls,
@@ -48,4 +48,5 @@ export const geminiProvider: ProviderImpl = {
   normalizeResponse: (res) => normalizeResponse(res as GeminiResponse),
   extractToolCalls: (res) => extractToolCalls(res as GeminiResponse),
   extractUsage: (res) => extractUsage((res as GeminiResponse).usageMetadata),
+  applyContentRewrites: (req, rewriter) => applyContentRewrites(req as GeminiRequest, rewriter),
 };

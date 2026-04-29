@@ -12,6 +12,7 @@ export {
   piiScan,
   outputContentRegex,
   outputPiiScan,
+  redactPiiInToolResults,
   costBudget,
   reasoningBudget,
 } from './builtins.js';
@@ -24,6 +25,7 @@ export type {
   PiiPatternName,
   OutputContentRegexOptions,
   OutputPiiScanOptions,
+  RedactPiiInToolResultsOptions,
   CostBudgetOptions,
   CostPricer,
   ReasoningBudgetOptions,

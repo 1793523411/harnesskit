@@ -68,15 +68,12 @@ Workaround: emit those manually from your node functions if you need them.
 
 ## True mid-stream cancellation across all providers
 
-**Status**: Anthropic only.
+**Status**: Anthropic, Gemini, OpenAI Responses. Chat Completions still N/A.
 
-Anthropic's `content_block_stop` cleanly delineates when a tool_use is fully assembled mid-stream — we can fire `tool.call.requested`, get a deny decision, and cancel the upstream connection before more tokens are generated. See `packages/provider-fetch/src/providers/anthropic/stream.ts`.
-
-OpenAI Chat Completions: tool_calls are spread across many delta chunks. By the time a tool call is fully assembled, `finish_reason: 'tool_calls'` has typically arrived too — the response is essentially over. Mid-stream cancel saves nothing.
-
-Gemini: similar to Anthropic in principle (function_call appears as a complete part). Not yet implemented.
-
-OpenAI Responses API: deltas finalize via `response.output_item.done`; should be implementable like Anthropic. Not yet done.
+- **Anthropic**: `content_block_stop` cleanly delineates when a `tool_use` is fully assembled. We fire `tool.call.requested` from `consumeAnthropicStream`, get a deny decision, and cancel the upstream connection before more tokens are generated.
+- **Gemini**: a `functionCall` part arrives complete inside a single chunk's `content.parts[]` (args are not split). When a new functionCall key appears in `consumeGeminiStream`, it fires the eager hook — same abort path as Anthropic.
+- **OpenAI Responses**: deltas finalize via `response.output_item.done`. For `function_call` items we fire the eager hook there.
+- **OpenAI Chat Completions**: tool_calls are spread across many delta chunks; by the time a tool call is fully assembled, `finish_reason: 'tool_calls'` has typically arrived too. Mid-stream cancel saves nothing — left as-is.
 
 ## Real sandbox (Docker / Firecracker / WebContainer)
 
@@ -88,7 +85,11 @@ For real prevention (e.g., model emits `shell rm -rf /`, host SDK is going to ac
 
 ## Smaller improvements queued
 
-- `piiScan` rewrites tool_result content (instead of just denying input). Currently `outputPiiScan` emits an `error` audit event; making it actively redact requires the same wire-rewrite plumbing as `applyDenyRewrites`.
 - Streaming output for `runAgent` (currently buffers and returns final text only).
 - Web trace viewer: tree view (parent/child relationships from `subagent.spawn`), comparison mode (two traces side-by-side), search-by-content.
 - Replay: support time-shifting (replay at original wall-clock pace) for live UI demos.
+
+## Recently shipped
+
+- **Active tool-result redaction.** `installFetchInterceptor({ rewriteToolResults })` runs after the deny rewrite pass; `redactPiiInToolResults` from `@harnesskit/policy` swaps PII matches for `[REDACTED]` before the model sees the result. Pair with `piiScan` (input gating) to cover both directions. Implemented for Anthropic, OpenAI Chat, OpenAI Responses, and Gemini.
+- **Mid-stream cancel for Gemini and OpenAI Responses.** See above.

@@ -19,6 +19,7 @@ import {
   policy,
   policyToInterceptor,
   reasoningBudget,
+  redactPiiInToolResults,
   requireApproval,
   tokenBudget,
 } from './index.js';
@@ -320,6 +321,47 @@ describe('outputPiiScan', () => {
     const err = events.find((e) => e.type === 'error');
     if (err?.type !== 'error') throw new Error('expected error');
     expect(err.message).toContain('alice@example.com');
+  });
+});
+
+describe('redactPiiInToolResults', () => {
+  it('replaces email matches with the default token', () => {
+    const r = redactPiiInToolResults({ patterns: ['email'] });
+    const out = r('contact: alice@example.com', { toolUseId: 'a' });
+    expect(out).toBe('contact: [REDACTED]');
+  });
+
+  it('replaces multiple matches in one pass and across patterns', () => {
+    const r = redactPiiInToolResults({ patterns: ['email', 'ssn'], replacement: '###' });
+    const out = r('a@b.co X 123-45-6789 Y c@d.io', { toolUseId: 'a' });
+    expect(out).toBe('### X ### Y ###');
+  });
+
+  it('returns undefined when no PII matches (callers leave content unchanged)', () => {
+    const r = redactPiiInToolResults({ patterns: ['email'] });
+    expect(r('nothing here', { toolUseId: 'a' })).toBeUndefined();
+  });
+
+  it('redacts phone numbers in both parenthesized and dashed formats', () => {
+    const r = redactPiiInToolResults({ patterns: ['phone'] });
+    expect(r('call (415) 555-0142', { toolUseId: 'a' })).toBe('call [REDACTED]');
+    expect(r('call 415-555-0142', { toolUseId: 'a' })).toBe('call [REDACTED]');
+    expect(r('call 415.555.0142', { toolUseId: 'a' })).toBe('call [REDACTED]');
+    expect(r('call 4155550142', { toolUseId: 'a' })).toBe('call [REDACTED]');
+  });
+
+  it('does not over-match digit runs that look phone-like', () => {
+    const r = redactPiiInToolResults({ patterns: ['phone'] });
+    expect(r('order id 1234567890123', { toolUseId: 'a' })).toBeUndefined();
+  });
+
+  it('honors a per-tool lookup filter', () => {
+    const r = redactPiiInToolResults({
+      patterns: ['email'],
+      lookup: ({ toolUseId }) => toolUseId === 'allowlisted',
+    });
+    expect(r('a@b.co', { toolUseId: 'denied' })).toBeUndefined();
+    expect(r('a@b.co', { toolUseId: 'allowlisted' })).toBe('[REDACTED]');
   });
 });
 

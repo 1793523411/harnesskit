@@ -284,6 +284,67 @@ describe('Anthropic L1 interceptor', () => {
     expect(cancelCalled).toBe(true);
   });
 
+  it('actively rewrites tool_result content via rewriteToolResults', async () => {
+    const bus = new EventBus();
+    const events = collectEvents(bus);
+
+    let observedBody: { messages: Array<{ role: string; content: unknown }> } | undefined;
+    const target = {
+      fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+        observedBody = JSON.parse(init?.body as string);
+        return mockResponse({
+          id: 'msg_a',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-opus-4-7',
+          content: [{ type: 'text', text: 'noted' }],
+          stop_reason: 'end_turn',
+        });
+      },
+    };
+    const dispose = installFetchInterceptor({
+      bus,
+      target,
+      rewriteToolResults: (content, ctx) => {
+        if (ctx.toolUseId !== 'toolu_q') return undefined;
+        return content.replace(/\b\w+@\w+\.\w+\b/g, '[REDACTED-EMAIL]');
+      },
+    });
+
+    await target.fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      body: JSON.stringify({
+        model: 'claude-opus-4-7',
+        messages: [
+          { role: 'user', content: 'lookup' },
+          {
+            role: 'assistant',
+            content: [
+              { type: 'tool_use', id: 'toolu_q', name: 'lookup', input: { q: 'cloud' } },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_q',
+                content: 'Found user: alice@example.com — verified',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    dispose();
+
+    expect(observedBody).toBeDefined();
+    const lastUser = observedBody?.messages.at(-1);
+    const blocks = lastUser?.content as Array<{ tool_use_id: string; content: string }>;
+    expect(blocks[0]?.content).toBe('Found user: [REDACTED-EMAIL] — verified');
+    void events;
+  });
+
   it('rewrites tool_result on the next request when a tool_use was denied', async () => {
     const bus = new EventBus();
     bus.use({

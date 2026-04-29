@@ -1,5 +1,5 @@
 import type { ProviderImpl } from '../types.js';
-import { applyDenyRewrites } from './deny.js';
+import { applyContentRewrites, applyDenyRewrites } from './deny.js';
 import { detectOpenAIChat, detectOpenRouter } from './detect.js';
 import {
   extractToolCalls,
@@ -45,6 +45,10 @@ const sharedImpl = {
   normalizeResponse: (res: unknown) => normalizeResponse(res as OpenAIResponse),
   extractToolCalls: (res: unknown) => extractToolCalls(res as OpenAIResponse),
   extractUsage: (res: unknown) => extractUsage((res as OpenAIResponse).usage),
+  applyContentRewrites: (
+    req: unknown,
+    rewriter: import('../types.js').ToolResultRewriter,
+  ) => applyContentRewrites(req as OpenAIRequest, rewriter),
 };
 
 export const openaiProvider: ProviderImpl = {
