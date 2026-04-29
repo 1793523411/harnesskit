@@ -347,6 +347,12 @@ export interface RedactPiiInToolResultsOptions {
    * can short-circuit calls it doesn't care about. Default: rewrite all.
    */
   lookup?: (ctx: { toolUseId: string }) => boolean;
+  /**
+   * Optional callback fired once per tool_result that produced redactions.
+   * Receives the matched substrings (one entry per pattern that fired) so
+   * you can log, count, or push an audit event onto your own bus.
+   */
+  audit?: (info: { toolUseId: string; matches: Array<{ pattern: string; matched: string[] }> }) => void;
 }
 
 /**
@@ -377,12 +383,22 @@ export const redactPiiInToolResults = (
     if (opts.lookup && !opts.lookup(ctx)) return undefined;
     let out = content;
     let hit = false;
+    const auditMatches: Array<{ pattern: string; matched: string[] }> = [];
     for (const re of regexes) {
-      if (re.test(out)) {
-        // Reset regex state — we're about to use replace which scans from 0
-        re.lastIndex = 0;
-        out = out.replace(re, replacement);
-        hit = true;
+      // matchAll captures occurrences before we mutate `out` with replace()
+      const found = [...out.matchAll(re)].map((m) => m[0]);
+      if (found.length === 0) continue;
+      hit = true;
+      // Reset regex state — we're about to use replace which scans from 0
+      re.lastIndex = 0;
+      out = out.replace(re, replacement);
+      if (opts.audit) auditMatches.push({ pattern: re.source, matched: found });
+    }
+    if (hit && opts.audit) {
+      try {
+        opts.audit({ toolUseId: ctx.toolUseId, matches: auditMatches });
+      } catch {
+        // Audit must never break redaction
       }
     }
     return hit ? out : undefined;

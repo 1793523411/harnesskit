@@ -284,6 +284,161 @@ describe('Anthropic L1 interceptor', () => {
     expect(cancelCalled).toBe(true);
   });
 
+  it('invokes signRequest with the final body and merges returned headers', async () => {
+    const bus = new EventBus();
+    let observedHeaders: Record<string, string> = {};
+    let signerSawBody = '';
+    const target = {
+      fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+        observedHeaders = Object.fromEntries(new Headers(init?.headers ?? {}).entries());
+        return mockResponse({
+          id: 'msg_sign',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-opus-4-7',
+          content: [{ type: 'text', text: 'ok' }],
+          stop_reason: 'end_turn',
+        });
+      },
+    };
+    const dispose = installFetchInterceptor({
+      bus,
+      target,
+      signRequest: async ({ url, method, body, provider }) => {
+        signerSawBody = body;
+        return {
+          headers: {
+            authorization: `Bearer signed-${provider}`,
+            'x-amz-date': '20260429T000000Z',
+            'x-amz-target': `${method} ${url}`,
+          },
+        };
+      },
+    });
+
+    await target.fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': 'sk-ignored' },
+      body: JSON.stringify({
+        model: 'claude-opus-4-7',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    dispose();
+
+    // Body the signer saw equals the final serialized body the host sent.
+    expect(signerSawBody).toContain('"messages":');
+    expect(observedHeaders.authorization).toBe('Bearer signed-anthropic');
+    expect(observedHeaders['x-amz-date']).toBe('20260429T000000Z');
+    // Original headers are preserved if signer doesn't override them.
+    expect(observedHeaders['x-api-key']).toBe('sk-ignored');
+  });
+
+  it('chains multiple rewriters in order via array form', async () => {
+    const bus = new EventBus();
+    let observedBody: { messages: Array<{ role: string; content: unknown }> } | undefined;
+    const target = {
+      fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+        observedBody = JSON.parse(init?.body as string);
+        return mockResponse({
+          id: 'msg_chain',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-opus-4-7',
+          content: [{ type: 'text', text: 'noted' }],
+          stop_reason: 'end_turn',
+        });
+      },
+    };
+    const dispose = installFetchInterceptor({
+      bus,
+      target,
+      rewriteToolResults: [
+        (content) => content.replace(/alice/g, '<USER>'),
+        (content) => content.replace(/example\.com/g, '<DOMAIN>'),
+      ],
+    });
+
+    await target.fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      body: JSON.stringify({
+        model: 'claude-opus-4-7',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_chain',
+                content: 'alice@example.com works at example.com',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    dispose();
+
+    const blocks = observedBody?.messages.at(-1)?.content as Array<{ content: string }>;
+    expect(blocks[0]?.content).toBe('<USER>@<DOMAIN> works at <DOMAIN>');
+  });
+
+  it('catches rewriter exceptions, emits error event, leaves content unchanged', async () => {
+    const bus = new EventBus();
+    const events: AgentEvent[] = [];
+    bus.use({ on: (e) => void events.push(e) });
+    let observedBody: { messages: Array<{ role: string; content: unknown }> } | undefined;
+    const target = {
+      fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+        observedBody = JSON.parse(init?.body as string);
+        return mockResponse({
+          id: 'msg_throw',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-opus-4-7',
+          content: [{ type: 'text', text: 'noted' }],
+          stop_reason: 'end_turn',
+        });
+      },
+    };
+    const dispose = installFetchInterceptor({
+      bus,
+      target,
+      rewriteToolResults: () => {
+        throw new Error('boom');
+      },
+    });
+
+    await target.fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      body: JSON.stringify({
+        model: 'claude-opus-4-7',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_t',
+                content: 'sensitive payload',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    // give the async error event a tick
+    await new Promise((r) => setTimeout(r, 10));
+    dispose();
+
+    const blocks = observedBody?.messages.at(-1)?.content as Array<{ content: string }>;
+    expect(blocks[0]?.content).toBe('sensitive payload');
+    const errs = events.filter((e) => e.type === 'error');
+    expect(errs).toHaveLength(1);
+    if (errs[0]?.type !== 'error') throw new Error('expected error');
+    expect(errs[0].message).toContain('boom');
+  });
+
   it('actively rewrites tool_result content via rewriteToolResults', async () => {
     const bus = new EventBus();
     const events = collectEvents(bus);

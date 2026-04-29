@@ -100,13 +100,52 @@ const result = await runAgent({ bus, /* … */ });
 
 `runAgent` will not register additional policies on a bus you provide — assumed already configured.
 
+## Streaming — `runAgentStream`
+
+When you want token-by-token output (CLI spinners, web UIs, voice pipelines), use `runAgentStream` instead. Same options, same `RunAgentResult` at the end — but it's an `AsyncGenerator` you iterate.
+
+```ts
+import { runAgentStream } from '@harnesskit/runner';
+
+for await (const chunk of runAgentStream({
+  baseUrl: 'https://api.openai.com/v1',
+  apiKey: process.env.OPENAI_API_KEY!,
+  model: 'gpt-4o',
+  prompt: 'List my files',
+  tools: { read_file: { execute: (a) => fs.readFileSync(a.path as string, 'utf8') } },
+})) {
+  switch (chunk.type) {
+    case 'text.delta':
+      process.stdout.write(chunk.delta);
+      break;
+    case 'reasoning.delta':
+      // DeepSeek/Doubao/Qwen reasoning trace — show in a side panel.
+      break;
+    case 'tool.call.started':
+      console.log(`\n→ ${chunk.name}(${JSON.stringify(chunk.input)})`);
+      break;
+    case 'tool.call.finished':
+      console.log(`← ${String(chunk.result).slice(0, 60)}`);
+      break;
+    case 'round.end':
+      // Model finished emitting for this round. Useful for UI separators.
+      break;
+    case 'done':
+      // chunk.result has the same shape as runAgent()'s return — text,
+      // toolCalls, events, trace, rounds, messages.
+      console.log('total tool calls:', chunk.result.toolCalls.length);
+      break;
+  }
+}
+```
+
+Same harness applies — every chunk corresponds to events on the bus, so policies / recorders / OTel still observe everything.
+
 ## When to use this vs roll-your-own
 
-Use `runAgent` when:
+Use `runAgent` (buffered) or `runAgentStream` (token-stream) when:
 - You want `globalThis.fetch` interception (works for any host).
 - The OpenAI Chat Completions wire format covers your provider (most do).
-- You don't need streaming output to your end-user — streaming is **not** exposed via runAgent in v0; use `installFetchInterceptor` directly with your own loop if you need it.
 
 Roll your own loop when:
-- You need streaming responses surfaced to the caller.
 - You're using a provider with a different wire format that we don't normalize for runAgent (Anthropic Messages, Gemini generateContent, etc.). Note: those are still observed by L1 interception — but runAgent's loop only speaks Chat Completions today.

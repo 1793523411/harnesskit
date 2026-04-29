@@ -41,9 +41,46 @@ export interface FetchInterceptorOptions {
    * rewriter leaves a block unchanged. Returning a string replaces the
    * tool-result content the model is about to see. See
    * `redactPiiInToolResults` in @harnesskit/policy.
+   *
+   * Pass an array to chain multiple rewriters — each runs in order and the
+   * output of one feeds the next. A rewriter that throws is caught, logged
+   * as an `error` event, and treated as a no-op for that block.
    */
-  rewriteToolResults?: ToolResultRewriter;
+  rewriteToolResults?: ToolResultRewriter | readonly ToolResultRewriter[];
+  /**
+   * Optional request signer. Called after deny + content rewrite, before the
+   * upstream fetch. Lets you inject auth headers (e.g. AWS Sig V4 for Bedrock)
+   * computed from the final serialized body. Return any header overrides;
+   * the harness merges them into the outgoing request.
+   *
+   * Recipe with `aws4fetch`:
+   *
+   * ```ts
+   * import { AwsClient } from 'aws4fetch';
+   * const aws = new AwsClient({ accessKeyId, secretAccessKey, region });
+   * installFetchInterceptor({
+   *   bus,
+   *   signRequest: async ({ url, method, headers, body }) => {
+   *     const signed = await aws.sign(new Request(url, { method, headers, body }));
+   *     return { headers: Object.fromEntries(signed.headers) };
+   *   },
+   * });
+   * ```
+   */
+  signRequest?: SignRequestHook;
 }
+
+export interface SignRequestInput {
+  url: string;
+  method: string;
+  headers: Headers;
+  body: string;
+  provider: ProviderTag;
+}
+
+export type SignRequestHook = (
+  input: SignRequestInput,
+) => Promise<{ headers?: Record<string, string> } | undefined> | { headers?: Record<string, string> } | undefined;
 
 const BUILTIN_PROVIDERS: readonly ProviderImpl[] = [
   anthropicProvider,
@@ -77,6 +114,85 @@ const readJsonBody = (init: RequestInit | undefined): unknown => {
     }
   }
   return undefined;
+};
+
+const composeRewriters = (
+  rewriters: ToolResultRewriter | readonly ToolResultRewriter[],
+  bus: EventBus,
+  providerTag: ProviderTag,
+): ToolResultRewriter => {
+  const list = Array.isArray(rewriters) ? rewriters : [rewriters as ToolResultRewriter];
+  if (list.length === 1) {
+    const r = list[0];
+    if (!r) return () => undefined;
+    return (content, ctx) => {
+      try {
+        return r(content, ctx);
+      } catch (err) {
+        void bus.emit({
+          type: 'error',
+          ts: Date.now(),
+          ids: { sessionId: 'rewrite', turnId: 'rewrite', callId: ctx.toolUseId },
+          source: 'l1',
+          message: err instanceof Error ? err.message : String(err),
+          stage: 'turn.start',
+          cause: err,
+        });
+        return undefined;
+      }
+    };
+  }
+  return (content, ctx) => {
+    let current = content;
+    let touched = false;
+    for (const r of list) {
+      try {
+        const next = r(current, ctx);
+        if (next !== undefined && next !== current) {
+          current = next;
+          touched = true;
+        }
+      } catch (err) {
+        void bus.emit({
+          type: 'error',
+          ts: Date.now(),
+          ids: { sessionId: 'rewrite', turnId: 'rewrite', callId: ctx.toolUseId },
+          source: 'l1',
+          message: `[${providerTag}] rewriter threw: ${err instanceof Error ? err.message : String(err)}`,
+          stage: 'turn.start',
+          cause: err,
+        });
+      }
+    }
+    return touched ? current : undefined;
+  };
+};
+
+interface ApplySignArgs {
+  init: RequestInit | undefined;
+  body: string;
+  url: string;
+  providerTag: ProviderTag;
+  hook: SignRequestHook | undefined;
+}
+
+const applySignRequest = async (args: ApplySignArgs): Promise<RequestInit> => {
+  const baseInit = cloneInitWithBody(args.init, args.body);
+  if (!args.hook) return baseInit;
+  const baseHeaders = new Headers(baseInit.headers);
+  baseHeaders.set('content-type', baseHeaders.get('content-type') ?? 'application/json');
+  const result = await args.hook({
+    url: args.url,
+    method: (baseInit.method ?? 'POST').toUpperCase(),
+    headers: baseHeaders,
+    body: args.body,
+    provider: args.providerTag,
+  });
+  if (!result?.headers) return baseInit;
+  const merged = new Headers(baseHeaders);
+  for (const [k, v] of Object.entries(result.headers)) merged.set(k, v);
+  merged.delete('content-length');
+  return { ...baseInit, headers: merged };
 };
 
 const cloneInitWithBody = (init: RequestInit | undefined, body: string): RequestInit => {
@@ -211,7 +327,12 @@ export const installFetchInterceptor = (opts: FetchInterceptorOptions): (() => v
     for (const id of rewroteIds) ctx.state.deniedCalls.delete(id);
     let outgoing: unknown = rewritten;
     if (opts.rewriteToolResults && provider.applyContentRewrites) {
-      const result = provider.applyContentRewrites(outgoing, opts.rewriteToolResults);
+      const composed = composeRewriters(
+        opts.rewriteToolResults,
+        ctx.bus,
+        provider.tag,
+      );
+      const result = provider.applyContentRewrites(outgoing, composed);
       outgoing = result.rewritten;
     }
 
@@ -230,12 +351,17 @@ export const installFetchInterceptor = (opts: FetchInterceptorOptions): (() => v
     await ctx.bus.emit(startEvt);
 
     const startMs = Date.now();
+    const serializedBody = provider.serializeRequest(outgoing);
+    const signedInit = await applySignRequest({
+      init,
+      body: serializedBody,
+      url: url.toString(),
+      providerTag: provider.tag,
+      hook: opts.signRequest,
+    });
     let response: Response;
     try {
-      response = await original(
-        input,
-        cloneInitWithBody(init, provider.serializeRequest(outgoing)),
-      );
+      response = await original(input, signedInit);
     } catch (err) {
       await ctx.bus.emit({
         type: 'error',

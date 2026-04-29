@@ -350,6 +350,32 @@ describe('redactPiiInToolResults', () => {
     expect(r('call 4155550142', { toolUseId: 'a' })).toBe('call [REDACTED]');
   });
 
+  it('fires the audit callback once per redacted tool_result with the matches found', () => {
+    const audits: Array<{ toolUseId: string; matches: Array<{ pattern: string; matched: string[] }> }> = [];
+    const r = redactPiiInToolResults({
+      patterns: ['email', 'ssn'],
+      audit: (info) => audits.push(info),
+    });
+    expect(r('alice@a.co and bob@b.co with 123-45-6789', { toolUseId: 'a' })).toContain(
+      '[REDACTED]',
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.toolUseId).toBe('a');
+    expect(audits[0]?.matches.map((m) => m.matched.length).reduce((a, b) => a + b, 0)).toBe(3);
+  });
+
+  it('does not fire the audit callback when nothing matched', () => {
+    let called = 0;
+    const r = redactPiiInToolResults({
+      patterns: ['email'],
+      audit: () => {
+        called++;
+      },
+    });
+    r('nothing here', { toolUseId: 'a' });
+    expect(called).toBe(0);
+  });
+
   it('does not over-match digit runs that look phone-like', () => {
     const r = redactPiiInToolResults({ patterns: ['phone'] });
     expect(r('order id 1234567890123', { toolUseId: 'a' })).toBeUndefined();

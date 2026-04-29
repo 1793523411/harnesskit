@@ -4,37 +4,37 @@ What's not in v0 yet, and why.
 
 ## AWS Bedrock provider
 
-**Status**: Not natively supported. Pluggable workaround documented below.
+**Status**: Auth is solved (`signRequest` hook). Wire-format detect for `*/converse` and `*/invoke` is still pending.
 
 Bedrock has two wire formats:
-- **Per-model API** (`/model/<id>/invoke` or `/model/<id>/invoke-with-response-stream`) — model-specific (Anthropic Claude on Bedrock looks Anthropic-ish but with `prompt` field instead of `messages` for older Claude 2.x).
 - **Converse API** (`/model/<id>/converse`) — universal, OpenAI-style messages.
+- **Per-model API** (`/model/<id>/invoke` or `/model/<id>/invoke-with-response-stream`) — model-specific (Anthropic Claude on Bedrock looks Anthropic-ish; older Claude 2.x uses `prompt` field).
 
-Why it's not a built-in provider:
-
-1. **Auth**: AWS Sig V4 signing is non-trivial — credential resolution, date scope, signed headers. Adding it to harnesskit means depending on either `@aws-sdk/signature-v4` (heavyweight) or rolling our own (high blast radius).
-2. **Wire variance**: Per-model wire format differs across Claude / Llama / Mistral / Titan etc. Each would need its own normalizer.
-
-**Workaround that works today**:
+Auth was the hard part — AWS Sig V4 signing — and is now pluggable via the `signRequest` hook. You bring `aws4fetch` or `@aws-sdk/signature-v4`; harnesskit hands you the final body and merges your returned headers:
 
 ```ts
-// Use the AWS SDK to make the call (it handles sigv4); harnesskit does NOT
-// see this — but you can manually emit events from the bedrockClient response.
-//
-// OR: use a Bedrock-compatible proxy (e.g. LiteLLM, Cloudflare AI Gateway)
-// that exposes Anthropic Messages or OpenAI Chat Completions. Then add the
-// proxy host to customHosts and harnesskit picks it up automatically.
+import { AwsClient } from 'aws4fetch';
+const aws = new AwsClient({
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+  region: 'us-east-1',
+  service: 'bedrock',
+});
 installFetchInterceptor({
   bus,
-  customHosts: { openai: ['my-litellm-bedrock-proxy.internal'] },
+  customHosts: { anthropic: ['bedrock-runtime.us-east-1.amazonaws.com'] },
+  signRequest: async ({ url, method, headers, body }) => {
+    const signed = await aws.sign(new Request(url, { method, headers, body }));
+    return { headers: Object.fromEntries(signed.headers) };
+  },
 });
 ```
 
-A proper built-in `bedrockProvider` would need:
-- A `signRequest` option on `FetchInterceptorOptions` taking `(req: { url, headers, body }) => Promise<{ headers }>` — letting users plug in their own AWS SDK / `aws4fetch`.
-- Wire-format detect: `*/converse` → OpenAI normalize, `*/invoke` → per-model dispatcher.
+What still needs work for native Bedrock:
+- A wire-format detector that recognizes `bedrock-runtime.*.amazonaws.com` and routes `*/converse` to OpenAI-style normalize, `*/invoke` to a per-model dispatcher (Claude / Llama / Mistral / Titan each need their own).
+- A streaming consumer for `invoke-with-response-stream` (each chunk arrives base64-encoded inside an EventStream framing).
 
-PRs welcome.
+In the meantime, a Bedrock-compatible proxy (LiteLLM, Cloudflare AI Gateway) plus `customHosts` is still the lowest-friction path.
 
 ## Google Vertex AI provider
 
@@ -85,11 +85,16 @@ For real prevention (e.g., model emits `shell rm -rf /`, host SDK is going to ac
 
 ## Smaller improvements queued
 
-- Streaming output for `runAgent` (currently buffers and returns final text only).
 - Web trace viewer: tree view (parent/child relationships from `subagent.spawn`), comparison mode (two traces side-by-side), search-by-content.
 - Replay: support time-shifting (replay at original wall-clock pace) for live UI demos.
+- Anthropic Claude on Vertex (`:rawPredict`) — Gemini-style `:generateContent` already routes; Claude on Vertex uses a different path so still needs its own provider entry.
+- Bedrock wire-format detector + per-model dispatcher (auth is now plug-in via `signRequest`).
 
 ## Recently shipped
 
+- **Streaming runner** — `runAgentStream` returns an `AsyncGenerator` yielding `text.delta`, `reasoning.delta`, `tool.call.{started,finished}`, `round.end`, and a final `done` chunk with the full `RunAgentResult`. Same harness applies; same buffered result shape at the end. See `docs/runner.md` and `examples/src/demos/12-streaming-runner.ts`.
+- **`signRequest` hook** — let callers compute auth headers from the final serialized body. Recipe in the Bedrock section above; demo at `examples/src/showcase-sign-request.ts`.
+- **Multi-rewriter chains + exception fallback** — `rewriteToolResults` accepts a single rewriter or an array. Each runs in order, output of one feeds the next. A throw is caught, emitted as an `error` event, and treated as no-op for that block. Showcase at `examples/src/showcase-rewriter-chain.ts`.
+- **Audit hook on `redactPiiInToolResults`** — pass `audit: ({toolUseId, matches}) => …` to log/track redactions while still actively scrubbing. Audit failures never break redaction.
 - **Active tool-result redaction.** `installFetchInterceptor({ rewriteToolResults })` runs after the deny rewrite pass; `redactPiiInToolResults` from `@harnesskit/policy` swaps PII matches for `[REDACTED]` before the model sees the result. Pair with `piiScan` (input gating) to cover both directions. Implemented for Anthropic, OpenAI Chat, OpenAI Responses, and Gemini.
 - **Mid-stream cancel for Gemini and OpenAI Responses.** See above.
