@@ -18,6 +18,7 @@ Pick the order that fits your goal:
 | [Recipes](./recipes.md) | 10 min | Common patterns: audit, approval, budget, multi-tenant |
 | [Runner](./runner.md) | 5 min | `runAgent({...})` — 30-line agent loops with full harness wiring |
 | [OpenTelemetry](./otel.md) | 5 min | Map AgentEvents to OTel spans for production observability |
+| [Roadmap](./roadmap.md) | 5 min | Bedrock / Vertex / sandbox — what's not in v0 and the workarounds |
 
 ## Working examples
 

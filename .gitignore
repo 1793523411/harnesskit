@@ -11,3 +11,7 @@ coverage
 # Local Claude Code / OMC artifacts (user-specific, not part of the SDK)
 .claude
 .omc
+
+# Trace dumps from examples/src/demos/05-trace-to-file.ts
+examples/trace.json
+trace.json

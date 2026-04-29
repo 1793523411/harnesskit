@@ -113,6 +113,7 @@ const emitTurnEnd = async (
   startMs: number,
   provider: ProviderImpl,
   res: unknown,
+  opts: { skipCallIds?: readonly string[]; aborted?: boolean } = {},
 ): Promise<void> => {
   const turnEnd: AgentEvent = {
     type: 'turn.end',
@@ -136,7 +137,11 @@ const emitTurnEnd = async (
     });
   }
 
-  await emitToolCalls(ctx.bus, ids, provider.extractToolCalls(res), ctx.state);
+  // If we're here after a mid-stream abort, we don't want to re-emit calls
+  // that were already eagerly emitted (and possibly denied). Filter those out.
+  const skip = new Set(opts.skipCallIds ?? []);
+  const remaining = provider.extractToolCalls(res).filter((c) => !skip.has(c.id));
+  await emitToolCalls(ctx.bus, ids, remaining, ctx.state);
 };
 
 export const installFetchInterceptor = (opts: FetchInterceptorOptions): (() => void) => {
@@ -232,9 +237,77 @@ export const installFetchInterceptor = (opts: FetchInterceptorOptions): (() => v
       response.headers.get('content-type')?.startsWith('text/event-stream') === true;
 
     if (isStream && response.body) {
-      const [forHost, forUs] = response.body.tee();
+      // Manual fan-out instead of tee — tee locks the source so we can't
+      // cancel it. With a direct reader, calling sourceReader.cancel() in
+      // the deny path propagates to the upstream HTTP connection and the
+      // model stops generating.
+      const sourceReader = response.body.getReader();
+      const hostPipe = new TransformStream<Uint8Array, Uint8Array>();
+      const tapPipe = new TransformStream<Uint8Array, Uint8Array>();
+      const hostWriter = hostPipe.writable.getWriter();
+      const tapWriter = tapPipe.writable.getWriter();
+
+      let aborted = false;
+      // Pump source → host + tap. Closes both writers on EOF or on abort.
       void (async () => {
-        const { response: assembled, errored } = await provider.consumeStream(forUs);
+        try {
+          while (!aborted) {
+            const { done, value } = await sourceReader.read();
+            if (done) break;
+            await Promise.all([
+              hostWriter.write(value).catch(() => undefined),
+              tapWriter.write(value).catch(() => undefined),
+            ]);
+          }
+        } catch {
+          // Reader cancellation throws — fall through to close
+        } finally {
+          await hostWriter.close().catch(() => undefined);
+          await tapWriter.close().catch(() => undefined);
+        }
+      })();
+
+      void (async () => {
+        const {
+          response: assembled,
+          errored,
+          eagerlyEmittedCallIds,
+          aborted: streamAborted,
+        } = await provider.consumeStream(tapPipe.readable, {
+          onToolCall: async (call) => {
+            const callIds: AgentIds = { ...ids, callId: call.id };
+            const decision = await ctx.bus.emit({
+              type: 'tool.call.requested',
+              ts: Date.now(),
+              ids: callIds,
+              source: 'l1',
+              call,
+            });
+            if (decision.denied) {
+              ctx.state.deniedCalls.set(call.id, decision.denied.reason);
+              await ctx.bus.emit({
+                type: 'tool.call.denied',
+                ts: Date.now(),
+                ids: callIds,
+                source: 'l1',
+                call,
+                reason: decision.denied.reason,
+                ...(decision.denied.policyId ? { policyId: decision.denied.policyId } : {}),
+              });
+              // Mark abort flag and cancel the upstream connection. The
+              // pump loop sees `aborted` and stops; sourceReader.cancel()
+              // tells the network layer to close the connection so the
+              // model server stops generating.
+              aborted = true;
+              await sourceReader.cancel().catch(() => undefined);
+              return { abort: true };
+            }
+            return { abort: false };
+          },
+        });
+        // Use the local-scope `streamAborted` (returned by consumeStream)
+        // to feed the skip filter; `aborted` (outer var) tracks pump state.
+        void streamAborted;
         if (errored) {
           await ctx.bus.emit({
             type: 'error',
@@ -246,9 +319,12 @@ export const installFetchInterceptor = (opts: FetchInterceptorOptions): (() => v
             cause: errored,
           });
         }
-        await emitTurnEnd(ctx, ids, startMs, provider, assembled);
+        await emitTurnEnd(ctx, ids, startMs, provider, assembled, {
+          ...(eagerlyEmittedCallIds ? { skipCallIds: eagerlyEmittedCallIds } : {}),
+          aborted,
+        });
       })();
-      return new Response(forHost, {
+      return new Response(hostPipe.readable, {
         status: response.status,
         statusText: response.statusText,
         headers: response.headers,

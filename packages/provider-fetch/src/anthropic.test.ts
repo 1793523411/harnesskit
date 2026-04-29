@@ -198,12 +198,90 @@ describe('Anthropic L1 interceptor', () => {
     dispose();
 
     const types = events.map((e) => e.type);
-    expect(types).toEqual(['turn.start', 'turn.end', 'usage', 'tool.call.requested']);
+    // Eager emission: tool.call.requested fires AS the tool_use content block
+    // completes mid-stream, before turn.end / usage.
+    expect(types).toEqual(['turn.start', 'tool.call.requested', 'turn.end', 'usage']);
 
-    const toolEvt = events[3];
+    const toolEvt = events.find((e) => e.type === 'tool.call.requested');
     if (toolEvt?.type !== 'tool.call.requested') throw new Error('expected tool.call.requested');
     expect(toolEvt.call.id).toBe('toolu_s1');
     expect(toolEvt.call.input).toEqual({ cmd: 'ls' });
+  });
+
+  it('aborts mid-stream when policy denies a tool_use', async () => {
+    const bus = new EventBus();
+    bus.use({
+      on: (e, ctx) => {
+        if (e.type === 'tool.call.requested' && e.call.name === 'shell') {
+          ctx.deny('shell disabled', 'no-shell');
+        }
+      },
+    });
+    const events = collectEvents(bus);
+    let cancelCalled = false;
+    const target = {
+      fetch: async () => {
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            const enc = new TextEncoder();
+            const send = (event: string, data: unknown) =>
+              controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+            send('message_start', {
+              type: 'message_start',
+              message: {
+                id: 'msg_x',
+                model: 'claude-opus-4-7',
+                usage: { input_tokens: 5, output_tokens: 0 },
+              },
+            });
+            send('content_block_start', {
+              type: 'content_block_start',
+              index: 0,
+              content_block: { type: 'tool_use', id: 'toolu_x', name: 'shell', input: {} },
+            });
+            send('content_block_delta', {
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'input_json_delta', partial_json: '{"cmd":"ls"}' },
+            });
+            send('content_block_stop', { type: 'content_block_stop', index: 0 });
+            // Aborted here — these next chunks should never be processed
+            await new Promise((r) => setTimeout(r, 10));
+            send('content_block_start', {
+              type: 'content_block_start',
+              index: 1,
+              content_block: { type: 'text', text: '' },
+            });
+            controller.close();
+          },
+          cancel() {
+            cancelCalled = true;
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      },
+    };
+    const dispose = installFetchInterceptor({ bus, target });
+
+    const response = await target.fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      body: JSON.stringify({
+        model: 'claude-opus-4-7',
+        stream: true,
+        messages: [{ role: 'user', content: 'do it' }],
+      }),
+    });
+    await response.text();
+    await new Promise((r) => setTimeout(r, 50));
+    dispose();
+
+    const types = events.map((e) => e.type);
+    expect(types).toContain('tool.call.requested');
+    expect(types).toContain('tool.call.denied');
+    expect(cancelCalled).toBe(true);
   });
 
   it('rewrites tool_result on the next request when a tool_use was denied', async () => {

@@ -27,11 +27,20 @@ const sharedImpl = {
   normalizeRequest: (req: unknown) => normalizeRequest(req as OpenAIRequest),
   consumeStream: consumeOpenAIStream,
   parseResponseText: (text: string) => {
+    let parsed: unknown;
     try {
-      return JSON.parse(text) as OpenAIResponse;
+      parsed = JSON.parse(text);
     } catch {
       return undefined;
     }
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      !Array.isArray((parsed as { choices?: unknown }).choices)
+    ) {
+      return undefined;
+    }
+    return parsed as OpenAIResponse;
   },
   normalizeResponse: (res: unknown) => normalizeResponse(res as OpenAIResponse),
   extractToolCalls: (res: unknown) => extractToolCalls(res as OpenAIResponse),

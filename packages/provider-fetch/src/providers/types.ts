@@ -18,6 +18,17 @@ export interface ProviderDetectOpts {
 }
 
 /**
+ * Optional hooks passed by intercept.ts when consuming a streaming response.
+ * Providers that can identify tool calls mid-stream (Anthropic content_block_stop,
+ * Gemini complete functionCall part) call onToolCall as soon as the call is
+ * fully assembled. Returning `{abort:true}` causes the consumer to stop
+ * reading; intercept.ts then cancels the upstream connection.
+ */
+export interface ConsumeStreamOpts {
+  onToolCall?: (call: ToolCall) => Promise<{ abort: boolean }>;
+}
+
+/**
  * Provider implementations are opaque at the registry level: requests and
  * responses are typed `unknown` so the registry can hold heterogeneous providers
  * without generics ceremony. Each impl casts internally.
@@ -40,7 +51,15 @@ export interface ProviderImpl {
   normalizeRequest(req: unknown): NormalizedRequest;
   consumeStream(
     stream: ReadableStream<Uint8Array>,
-  ): Promise<{ response: unknown; errored: Error | undefined }>;
+    opts?: ConsumeStreamOpts,
+  ): Promise<{
+    response: unknown;
+    errored: Error | undefined;
+    /** Tool-call ids that were already eagerly emitted via opts.onToolCall. */
+    eagerlyEmittedCallIds?: string[];
+    /** True if the consumer aborted early due to onToolCall returning {abort:true}. */
+    aborted?: boolean;
+  }>;
   parseResponseText(text: string): unknown | undefined;
   normalizeResponse(res: unknown): NormalizedResponse;
   extractToolCalls(res: unknown): ToolCall[];

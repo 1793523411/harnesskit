@@ -29,11 +29,20 @@ export const anthropicProvider: ProviderImpl = {
   normalizeRequest: (req) => normalizeRequest(req as AnthropicRequest),
   consumeStream: consumeAnthropicStream,
   parseResponseText: (text) => {
+    let parsed: unknown;
     try {
-      return JSON.parse(text) as AnthropicResponse;
+      parsed = JSON.parse(text);
     } catch {
       return undefined;
     }
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      !Array.isArray((parsed as { content?: unknown }).content)
+    ) {
+      return undefined;
+    }
+    return parsed as AnthropicResponse;
   },
   normalizeResponse: (res) => normalizeResponse(res as AnthropicResponse),
   extractToolCalls: (res) => extractToolCalls(res as AnthropicResponse),

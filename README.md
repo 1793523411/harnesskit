@@ -48,6 +48,7 @@ Three integration layers, all optional, all emit the same `AgentEvent` shape so 
 | [`@harnesskit/adapter-claude-agent-sdk`](./packages/adapter-claude-agent-sdk) | L2 adapter for `@anthropic-ai/claude-agent-sdk` |
 | [`@harnesskit/adapter-openai-agents`](./packages/adapter-openai-agents) | L2 adapter for `@openai/agents` |
 | [`@harnesskit/adapter-vercel-ai`](./packages/adapter-vercel-ai) | L2 adapter for `ai` (Vercel AI SDK) |
+| [`@harnesskit/adapter-langgraph`](./packages/adapter-langgraph) | LangChain.js / LangGraph callback handler that maps to AgentEvents |
 | [`apps/trace-viewer`](./apps/trace-viewer) | Standalone single-file HTML viewer for captured traces |
 
 ## Install
@@ -88,6 +89,31 @@ VOLCENGINE_API_KEY=… pnpm --filter @harnesskit/examples integration-volcengine
 VOLCENGINE_API_KEY=… DEEPSEEK_API_KEY=… MINIMAX_API_KEY=… OPENAI_API_KEY=… \
   pnpm --filter @harnesskit/examples integration-real-api                          # 4-provider parity + edge cases
 VOLCENGINE_API_KEY=… pnpm --filter @harnesskit/examples showcase                   # before/after demo (see below)
+```
+
+### Standalone demos (`examples/src/demos/`)
+
+Each demo is one file = one concept. Configure providers via [`examples/.env.example`](./examples/.env.example) → copy to `examples/.env`, then:
+
+```bash
+pnpm --filter @harnesskit/examples demo:reasoning              # 4 reasoning models side-by-side
+pnpm --filter @harnesskit/examples demo:cross-provider-tools   # same tool, 4 wire formats, identical events
+pnpm --filter @harnesskit/examples demo:cost                   # real $ cost tracking + budget enforcement
+pnpm --filter @harnesskit/examples demo:otel                   # OTel span tree from a real run
+pnpm --filter @harnesskit/examples demo:trace-file             # dump trace.json for the trace-viewer HTML
+pnpm --filter @harnesskit/examples demo:replay                 # what-if: replay against stricter policy
+pnpm --filter @harnesskit/examples demo:approval               # interactive stdin approval gate
+pnpm --filter @harnesskit/examples demo:concurrent             # 10 parallel agents, isolated buses
+```
+
+Sample output from `demo:reasoning` against 4 reasoning models:
+
+```
+label                              | thinking | text | in→out tokens | duration
+doubao-pro (volcengine)            |     1518 |  807 |    94→793     | 18103ms
+deepseek-reasoner                  |      201 |   21 |    48→95      | 2677ms
+gemini-3-flash-thinking (polo)     |        0 |    0 |     0→0       | 811ms
+gpt-5 (polo)                       |        0 |  160 |    50→467     | 7589ms
 ```
 
 ### Showcase: dangerous-tool recovery

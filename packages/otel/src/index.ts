@@ -15,6 +15,9 @@ export interface OtelSpan {
   end(endTime?: number): unknown;
 }
 
+/** Opaque OTel context handle. Use `context.active()` from `@opentelemetry/api`. */
+export type OtelContext = unknown;
+
 export interface OtelTracer {
   startSpan(
     name: string,
@@ -22,6 +25,7 @@ export interface OtelTracer {
       attributes?: Record<string, AttributeValue>;
       startTime?: number;
     },
+    context?: OtelContext,
   ): OtelSpan;
 }
 
@@ -34,6 +38,15 @@ export interface OtelExporterOptions {
   prefix?: string;
   /** Hook to redact event before attributes are written. */
   redactAttributes?: (key: string, value: AttributeValue) => AttributeValue;
+  /**
+   * Parent OTel context. When set, the session span starts under it; turn
+   * spans nest under the session span's context (use `trace.setSpan(ctx, span)`
+   * from `@opentelemetry/api` if you need explicit nesting).
+   *
+   * Pass `context.active()` from `@opentelemetry/api` to inherit your app's
+   * current span automatically.
+   */
+  parentContext?: OtelContext;
 }
 
 const trim = (s: string, max = 500): string => (s.length > max ? `${s.slice(0, max)}…` : s);
@@ -41,9 +54,13 @@ const trim = (s: string, max = 500): string => (s.length > max ? `${s.slice(0, m
 export const otelExporter = (opts: OtelExporterOptions): Interceptor => {
   const prefix = opts.prefix ?? 'harnesskit.';
   const redact = opts.redactAttributes ?? ((_k, v) => v);
+  const parentCtx = opts.parentContext;
   const sessionSpans = new Map<string, OtelSpan>();
   const turnSpans = new Map<string, OtelSpan>();
   const callSpans = new Map<string, OtelSpan>();
+
+  const startSpan: OtelTracer['startSpan'] = (name, options) =>
+    opts.tracer.startSpan(name, options, parentCtx);
 
   const setAttr = (span: OtelSpan, key: string, value: AttributeValue): void => {
     const v = redact(key, value);
@@ -55,7 +72,7 @@ export const otelExporter = (opts: OtelExporterOptions): Interceptor => {
     on(event) {
       switch (event.type) {
         case 'session.start': {
-          const span = opts.tracer.startSpan(`${prefix}session`, { startTime: event.ts });
+          const span = startSpan(`${prefix}session`, { startTime: event.ts });
           setAttr(span, 'session.id', event.ids.sessionId);
           if (event.meta) {
             for (const [k, v] of Object.entries(event.meta)) {
@@ -77,7 +94,7 @@ export const otelExporter = (opts: OtelExporterOptions): Interceptor => {
           break;
         }
         case 'turn.start': {
-          const span = opts.tracer.startSpan(`${prefix}turn`, { startTime: event.ts });
+          const span = startSpan(`${prefix}turn`, { startTime: event.ts });
           setAttr(span, 'session.id', event.ids.sessionId);
           setAttr(span, 'turn.id', event.ids.turnId);
           setAttr(span, 'gen_ai.system', event.provider);
@@ -122,7 +139,7 @@ export const otelExporter = (opts: OtelExporterOptions): Interceptor => {
         }
         case 'tool.call.requested': {
           const id = event.ids.callId ?? event.call.id;
-          const span = opts.tracer.startSpan(`${prefix}tool.${event.call.name}`, {
+          const span = startSpan(`${prefix}tool.${event.call.name}`, {
             startTime: event.ts,
           });
           setAttr(span, 'session.id', event.ids.sessionId);
