@@ -7,6 +7,7 @@ import {
   createTurnId,
 } from '@harnesskit/core';
 import { anthropicProvider } from './providers/anthropic/index.js';
+import { geminiProvider } from './providers/gemini/index.js';
 import { openaiResponsesProvider } from './providers/openai-responses/index.js';
 import { openaiProvider, openrouterProvider } from './providers/openai/index.js';
 import type { ProviderDetectOpts, ProviderImpl, ProviderTag } from './providers/types.js';
@@ -34,6 +35,7 @@ export interface FetchInterceptorOptions {
 const BUILTIN_PROVIDERS: readonly ProviderImpl[] = [
   anthropicProvider,
   openaiResponsesProvider,
+  geminiProvider,
   openaiProvider,
   openrouterProvider,
 ];
@@ -169,8 +171,20 @@ export const installFetchInterceptor = (opts: FetchInterceptorOptions): (() => v
     const provider = findProvider(input, init);
     if (!provider) return original(input, init);
 
+    let url: URL;
+    try {
+      url =
+        typeof input === 'string'
+          ? new URL(input)
+          : input instanceof URL
+            ? input
+            : new URL(input.url);
+    } catch {
+      return original(input, init);
+    }
+
     const body = readJsonBody(init);
-    const parsed = provider.parseRequest(body);
+    const parsed = provider.parseRequest(body, { url });
     if (parsed === undefined) return original(input, init);
 
     const ids: AgentIds = { sessionId: sessionIdResolver(), turnId: createTurnId() };

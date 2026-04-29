@@ -1,4 +1,12 @@
-import type { AgentEvent, GateableEvent, Policy, PolicyDecision, ToolCall } from '@harnesskit/core';
+import type {
+  AgentEvent,
+  GateableEvent,
+  Interceptor,
+  Policy,
+  PolicyDecision,
+  ToolCall,
+  UsageInfo,
+} from '@harnesskit/core';
 import { type Pattern, matchAny, matchPattern } from './match.js';
 import { SessionState } from './state.js';
 
@@ -264,3 +272,176 @@ export const hostnameAllowlist = (opts: HostnameAllowlistOptions): Policy => ({
       : { allow: false, reason: `hostname "${url.hostname}" not in allowlist` };
   },
 });
+
+// ── Output observers (Interceptors, audit-only) ────────────────────────
+
+const stringifyResultContent = (content: unknown): string => {
+  if (typeof content === 'string') return content;
+  if (!content) return '';
+  if (Array.isArray(content)) {
+    return content
+      .map((b) => {
+        if (b && typeof b === 'object') {
+          const part = b as { type?: string; text?: string };
+          if (part.type === 'text' && typeof part.text === 'string') return part.text;
+        }
+        return JSON.stringify(b);
+      })
+      .join('\n');
+  }
+  return JSON.stringify(content);
+};
+
+export interface OutputContentRegexOptions {
+  pattern: RegExp;
+  message?: string;
+  tools?: readonly Pattern[];
+  name?: string;
+}
+
+/**
+ * Observes tool.call.resolved content and emits an `error` event when it
+ * matches the regex. Audit-only — does not block the call (the result has
+ * already arrived). Use to flag secret leaks, prompt injection markers, etc.
+ */
+export const outputContentRegex = (opts: OutputContentRegexOptions): Interceptor => {
+  const toolPatterns = opts.tools ?? ['*'];
+  return {
+    name: opts.name ?? 'output-content-regex',
+    on(event, ctx) {
+      if (event.type !== 'tool.call.resolved') return;
+      if (!toolPatterns.some((tp) => matchPattern(tp, event.call.name))) return;
+      const content = stringifyResultContent(event.result.content);
+      const m = content.match(opts.pattern);
+      if (m) {
+        void ctx.emit({
+          type: 'error',
+          ts: Date.now(),
+          ids: event.ids,
+          source: event.source,
+          message:
+            opts.message ??
+            `tool "${event.call.name}" output matched ${opts.pattern.source}: ${m[0]}`,
+          stage: 'tool.call',
+        });
+      }
+    },
+  };
+};
+
+export interface OutputPiiScanOptions {
+  patterns?: readonly (PiiPatternName | RegExp)[];
+  tools?: readonly Pattern[];
+  name?: string;
+}
+
+/**
+ * Like {@link piiScan} but observes outgoing-from-tool content (i.e. what
+ * the model is about to see). Audit-only — emits `error` events. Pair with
+ * {@link piiScan} to cover both directions.
+ */
+export const outputPiiScan = (opts: OutputPiiScanOptions = {}): Interceptor => {
+  const patternList: readonly (PiiPatternName | RegExp)[] = opts.patterns ?? [
+    'email',
+    'ssn',
+    'creditcard',
+  ];
+  const regexes: RegExp[] = patternList.map((p) => (p instanceof RegExp ? p : PII_REGEXES[p]));
+  const toolPatterns = opts.tools ?? ['*'];
+  return {
+    name: opts.name ?? 'output-pii-scan',
+    on(event, ctx) {
+      if (event.type !== 'tool.call.resolved') return;
+      if (!toolPatterns.some((tp) => matchPattern(tp, event.call.name))) return;
+      const content = stringifyResultContent(event.result.content);
+      const hit = scanString(content, regexes);
+      if (hit) {
+        void ctx.emit({
+          type: 'error',
+          ts: Date.now(),
+          ids: event.ids,
+          source: event.source,
+          message: `PII in tool "${event.call.name}" output (${hit.pattern.source}): ${hit.matched}`,
+          stage: 'tool.call',
+        });
+      }
+    },
+  };
+};
+
+// ── Cost & reasoning budgets ───────────────────────────────────────────
+
+export type CostPricer = (usage: UsageInfo) => number;
+
+export interface CostBudgetOptions {
+  totalUsd: number;
+  /**
+   * Compute cost from a UsageInfo. Default reads `usage.costUsd` if present,
+   * else 0 (no enforcement). Most users provide a per-token pricer.
+   */
+  pricer?: CostPricer;
+  id?: string;
+}
+
+const defaultPricer: CostPricer = (u) => u.costUsd ?? 0;
+
+export const costBudget = (opts: CostBudgetOptions): Policy => {
+  const state = new SessionState<{ usd: number }>();
+  const init = () => ({ usd: 0 });
+  const pricer = opts.pricer ?? defaultPricer;
+  return {
+    id: opts.id ?? 'cost-budget',
+    description: `block tool calls when cumulative session cost exceeds $${opts.totalUsd}`,
+    observe(e: AgentEvent) {
+      if (e.type !== 'usage') return;
+      const s = state.get(e.ids, init);
+      s.usd += pricer(e.usage);
+    },
+    decide(e: GateableEvent): PolicyDecision {
+      const s = state.get(e.ids, init);
+      if (s.usd > opts.totalUsd) {
+        return {
+          allow: false,
+          reason: `cost budget $${opts.totalUsd} exceeded ($${s.usd.toFixed(4)})`,
+        };
+      }
+      return { allow: true };
+    },
+  };
+};
+
+export interface ReasoningBudgetOptions {
+  chars: number;
+  id?: string;
+}
+
+/**
+ * Caps cumulative reasoning-block character count per session. Useful against
+ * runaway chain-of-thought from reasoning models.
+ */
+export const reasoningBudget = (opts: ReasoningBudgetOptions): Policy => {
+  const state = new SessionState<{ chars: number }>();
+  const init = () => ({ chars: 0 });
+  return {
+    id: opts.id ?? 'reasoning-budget',
+    description: `block tool calls when cumulative reasoning exceeds ${opts.chars} chars`,
+    observe(e: AgentEvent) {
+      if (e.type !== 'turn.end') return;
+      const blocks = e.response?.content ?? [];
+      const s = state.get(e.ids, init);
+      for (const b of blocks) {
+        if (b.type === 'thinking') s.chars += b.text.length;
+      }
+    },
+    decide(e: GateableEvent): PolicyDecision {
+      const s = state.get(e.ids, init);
+      if (s.chars > opts.chars) {
+        return {
+          allow: false,
+          reason: `reasoning budget ${opts.chars} chars exceeded (${s.chars})`,
+        };
+      }
+      return { allow: true };
+    },
+  };
+};

@@ -21,7 +21,7 @@ export const anthropicProvider: ProviderImpl = {
   tag: 'anthropic',
   detect: (input, init, opts) =>
     detectAnthropic(input, init, { customHosts: opts.customHosts?.anthropic ?? [] }),
-  parseRequest: (body) => (isAnthropicShape(body) ? body : undefined),
+  parseRequest: (body, _ctx) => (isAnthropicShape(body) ? body : undefined),
   applyDeny: (req, denied) => applyDenyRewrites(req as AnthropicRequest, denied),
   serializeRequest: (req) => JSON.stringify(req),
   isStreamRequest: (req) => (req as AnthropicRequest).stream === true,

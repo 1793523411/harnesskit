@@ -29,7 +29,7 @@ export interface ProviderImpl {
     init: RequestInit | undefined,
     opts: ProviderDetectOpts,
   ): boolean;
-  parseRequest(body: unknown): unknown | undefined;
+  parseRequest(body: unknown, ctx: { url: URL }): unknown | undefined;
   applyDeny(
     req: unknown,
     deniedCalls: ReadonlyMap<string, string>,

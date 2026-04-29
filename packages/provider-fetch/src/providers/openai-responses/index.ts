@@ -17,7 +17,7 @@ export const openaiResponsesProvider: ProviderImpl = {
   tag: 'openai-responses',
   detect: (input, init, opts) =>
     detectOpenAIResponses(input, init, { customHosts: opts.customHosts?.openai ?? [] }),
-  parseRequest: (body) => (isResponsesShape(body) ? body : undefined),
+  parseRequest: (body, _ctx) => (isResponsesShape(body) ? body : undefined),
   applyDeny: (req, denied) => applyDenyRewrites(req as ResponsesRequest, denied),
   serializeRequest: (req) => JSON.stringify(req),
   isStreamRequest: (req) => (req as ResponsesRequest).stream === true,

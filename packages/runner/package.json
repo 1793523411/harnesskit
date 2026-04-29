@@ -1,0 +1,33 @@
+{
+  "name": "@harnesskit/runner",
+  "version": "0.0.0",
+  "description": "Minimal OpenAI-compatible agent loop helper that flows through @harnesskit/* observation",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "dev": "tsup src/index.ts --format esm --dts --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@harnesskit/core": "workspace:*",
+    "@harnesskit/eval": "workspace:*",
+    "@harnesskit/policy": "workspace:*",
+    "@harnesskit/provider-fetch": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false
+}

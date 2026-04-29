@@ -40,12 +40,15 @@ Three integration layers, all optional, all emit the same `AgentEvent` shape so 
 | Package | Purpose |
 | --- | --- |
 | [`@harnesskit/core`](./packages/core) | Event bus, `AgentEvent` types, `Interceptor`/`Policy` interfaces |
-| [`@harnesskit/policy`](./packages/policy) | 7 builtin policies, `allOf`/`anyOf` combinators, fluent builder |
+| [`@harnesskit/policy`](./packages/policy) | 11 builtin policies (allowTools/denyTools/requireApproval/tokenBudget/maxToolCalls/argRegex/hostnameAllowlist/piiScan/costBudget/reasoningBudget + outputContentRegex/outputPiiScan audit interceptors), `allOf`/`anyOf` combinators, fluent builder |
 | [`@harnesskit/eval`](./packages/eval) | `TraceRecorder`, 6 builtin scorers, JSON serialization, replay |
-| [`@harnesskit/provider-fetch`](./packages/provider-fetch) | L1 fetch interceptor — Anthropic, OpenAI Chat, OpenAI Responses, OpenRouter |
+| [`@harnesskit/provider-fetch`](./packages/provider-fetch) | L1 fetch interceptor — Anthropic, OpenAI Chat, OpenAI Responses, OpenRouter, **Gemini** |
+| [`@harnesskit/runner`](./packages/runner) | `runAgent({...})` — minimal OpenAI-Compat agent loop with policies + tracing wired |
+| [`@harnesskit/otel`](./packages/otel) | OpenTelemetry exporter mapping AgentEvents → spans |
 | [`@harnesskit/adapter-claude-agent-sdk`](./packages/adapter-claude-agent-sdk) | L2 adapter for `@anthropic-ai/claude-agent-sdk` |
 | [`@harnesskit/adapter-openai-agents`](./packages/adapter-openai-agents) | L2 adapter for `@openai/agents` |
 | [`@harnesskit/adapter-vercel-ai`](./packages/adapter-vercel-ai) | L2 adapter for `ai` (Vercel AI SDK) |
+| [`apps/trace-viewer`](./apps/trace-viewer) | Standalone single-file HTML viewer for captured traces |
 
 ## Install
 

@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>harnesskit trace viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0c0e12;
+      --panel: #15181f;
+      --border: #2a2f3b;
+      --text: #d4d8e2;
+      --muted: #6c7385;
+      --accent: #6ea8ff;
+      --green: #4dd07a;
+      --yellow: #f3b54a;
+      --red: #ee6b6b;
+      --purple: #b58cf9;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.5 ui-monospace, SF Mono, Menlo, Consolas, monospace;
+    }
+    header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    header h1 {
+      font-size: 14px;
+      margin: 0;
+      color: var(--accent);
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+    header .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    button, label.file-btn {
+      background: #1d212c;
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+      cursor: pointer;
+      border-radius: 4px;
+      font: inherit;
+    }
+    button:hover, label.file-btn:hover { background: #262b38; }
+    input[type="file"] { display: none; }
+    select, input[type="text"] {
+      background: #1d212c;
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 5px 8px;
+      border-radius: 4px;
+      font: inherit;
+    }
+    main {
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      gap: 0;
+      height: calc(100% - 53px);
+    }
+    .left { padding: 16px; overflow: auto; }
+    .right {
+      border-left: 1px solid var(--border);
+      background: var(--panel);
+      padding: 16px;
+      overflow: auto;
+    }
+    .stats {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+      padding: 12px;
+      background: var(--panel);
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    .stat { font-size: 12px; }
+    .stat .v { font-size: 18px; color: var(--accent); font-weight: 600; }
+    .stat .k { color: var(--muted); }
+    .timeline {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .event {
+      display: grid;
+      grid-template-columns: 100px 220px 1fr;
+      gap: 12px;
+      padding: 8px 12px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+      align-items: center;
+    }
+    .event:hover { border-color: var(--accent); }
+    .event.selected { border-color: var(--accent); background: #1f2531; }
+    .event .ts { color: var(--muted); font-size: 11px; }
+    .event .type {
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: 11px;
+      display: inline-block;
+      text-align: center;
+    }
+    .event .summary {
+      color: var(--text);
+      font-size: 12px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .type-session\.start, .type-session\.end { background: #1d3a4f; color: #8fc1de; }
+    .type-turn\.start, .type-turn\.end { background: #2a3a5c; color: #9bb1d8; }
+    .type-tool\.call\.requested { background: #3d2b5a; color: var(--purple); }
+    .type-tool\.call\.resolved { background: #1f4030; color: var(--green); }
+    .type-tool\.call\.denied { background: #4a2222; color: var(--red); }
+    .type-usage { background: #2a2a32; color: #aaa; }
+    .type-error { background: #4a2222; color: var(--red); }
+    .type-subagent\.spawn, .type-subagent\.return { background: #3a2a4a; color: var(--purple); }
+    .type-approval\.requested, .type-approval\.resolved { background: #4a3a1f; color: var(--yellow); }
+    .type-context\.compacted { background: #2a4a4a; color: #6dccd0; }
+
+    .right h2 { font-size: 13px; color: var(--accent); margin: 0 0 12px; }
+    .right pre {
+      background: #0a0c10;
+      padding: 12px;
+      border-radius: 4px;
+      overflow: auto;
+      max-height: calc(100vh - 200px);
+      white-space: pre-wrap;
+      word-break: break-all;
+      font-size: 11px;
+      color: var(--text);
+    }
+    .empty {
+      text-align: center;
+      padding: 64px 16px;
+      color: var(--muted);
+    }
+    .empty .drop {
+      border: 2px dashed var(--border);
+      padding: 40px;
+      border-radius: 8px;
+      margin-top: 16px;
+    }
+    code { color: var(--yellow); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>HARNESSKIT · trace viewer</h1>
+    <div class="controls">
+      <label class="file-btn">
+        Open trace.json
+        <input type="file" id="fileInput" accept=".json,.jsonl,application/json" />
+      </label>
+      <button id="loadDemo">Load demo trace</button>
+      <select id="filterType">
+        <option value="">All event types</option>
+      </select>
+      <select id="filterSource">
+        <option value="">L1+L2</option>
+        <option value="l1">L1 only</option>
+        <option value="l2">L2 only</option>
+      </select>
+      <input type="text" id="filterText" placeholder="search…" />
+      <span style="color: var(--muted); margin-left: auto;">
+        <span id="counter"></span>
+      </span>
+    </div>
+  </header>
+  <main>
+    <div class="left" id="left">
+      <div class="empty" id="empty">
+        <p>Drop a trace JSON to inspect.</p>
+        <div class="drop">
+          The viewer reads <code>traceToJson(trace)</code> output from
+          <code>@harnesskit/eval</code>.<br />
+          Or click <strong>Load demo trace</strong> to explore the format.
+        </div>
+      </div>
+      <div class="stats" id="stats" style="display:none"></div>
+      <div class="timeline" id="timeline"></div>
+    </div>
+    <aside class="right">
+      <h2>EVENT DETAILS</h2>
+      <div id="details"><p style="color: var(--muted);">Click an event in the timeline to inspect.</p></div>
+    </aside>
+  </main>
+
+  <script type="module">
+    const $ = (sel) => document.querySelector(sel);
+    let trace = null;
+    let selectedIdx = -1;
+
+    const formatTs = (ts, base) => {
+      const offset = base !== undefined ? ts - base : ts;
+      if (offset < 1000) return `+${offset.toFixed(0)}ms`;
+      return `+${(offset / 1000).toFixed(2)}s`;
+    };
+
+    const summarize = (e) => {
+      switch (e.type) {
+        case 'turn.start': return `${e.provider} · ${e.model} · ${e.request?.messages?.length ?? 0} msgs`;
+        case 'turn.end': return `${e.durationMs}ms · stop=${e.response?.stopReason ?? '?'}`;
+        case 'tool.call.requested': return `${e.call.name}(${JSON.stringify(e.call.input).slice(0, 60)})`;
+        case 'tool.call.resolved': {
+          const c = typeof e.result.content === 'string' ? e.result.content : JSON.stringify(e.result.content);
+          return `${e.call.name} → ${c.slice(0, 60)}…`;
+        }
+        case 'tool.call.denied': return `${e.call.name} → ${e.reason}`;
+        case 'usage': return `in=${e.usage.inputTokens ?? 0} out=${e.usage.outputTokens ?? 0}`;
+        case 'session.start': return `${e.ids.sessionId.slice(0, 16)}…`;
+        case 'session.end': return `reason=${e.reason}`;
+        case 'subagent.spawn': return `${e.parentSessionId.slice(0, 8)} → ${e.childSessionId.slice(0, 8)}${e.purpose ? ' (' + e.purpose + ')' : ''}`;
+        case 'subagent.return': return `${e.childSessionId.slice(0, 8)}…`;
+        case 'approval.requested': return `${e.call.name} pending=${e.pendingId.slice(0, 8)}`;
+        case 'approval.resolved': return `${e.decision} pending=${e.pendingId.slice(0, 8)}`;
+        case 'error': return `${e.stage}: ${e.message.slice(0, 80)}`;
+        case 'context.compacted': return `before=${e.beforeTokens ?? '?'} after=${e.afterTokens ?? '?'}`;
+        default: return '';
+      }
+    };
+
+    const computeStats = (events) => {
+      let denied = 0;
+      let toolCalls = 0;
+      let inTokens = 0;
+      let outTokens = 0;
+      let errors = 0;
+      let turns = 0;
+      for (const e of events) {
+        if (e.type === 'tool.call.requested') toolCalls++;
+        if (e.type === 'tool.call.denied') denied++;
+        if (e.type === 'usage') {
+          inTokens += e.usage.inputTokens ?? 0;
+          outTokens += e.usage.outputTokens ?? 0;
+        }
+        if (e.type === 'error') errors++;
+        if (e.type === 'turn.start') turns++;
+      }
+      return { denied, toolCalls, inTokens, outTokens, errors, turns };
+    };
+
+    const render = () => {
+      const events = trace?.events ?? [];
+      const filterType = $('#filterType').value;
+      const filterSource = $('#filterSource').value;
+      const filterText = $('#filterText').value.toLowerCase();
+      const filtered = events.filter((e, i) => {
+        if (filterType && e.type !== filterType) return false;
+        if (filterSource && e.source !== filterSource) return false;
+        if (filterText) {
+          const blob = JSON.stringify(e).toLowerCase();
+          if (!blob.includes(filterText)) return false;
+        }
+        e._idx = i;
+        return true;
+      });
+
+      const stats = computeStats(events);
+      $('#stats').innerHTML = `
+        <div class="stat"><div class="v">${events.length}</div><div class="k">events</div></div>
+        <div class="stat"><div class="v">${stats.turns}</div><div class="k">turns</div></div>
+        <div class="stat"><div class="v">${stats.toolCalls}</div><div class="k">tool calls</div></div>
+        <div class="stat"><div class="v" style="color: var(--red)">${stats.denied}</div><div class="k">denied</div></div>
+        <div class="stat"><div class="v">${stats.inTokens.toLocaleString()}</div><div class="k">input tokens</div></div>
+        <div class="stat"><div class="v">${stats.outTokens.toLocaleString()}</div><div class="k">output tokens</div></div>
+        <div class="stat"><div class="v" style="color: var(--red)">${stats.errors}</div><div class="k">errors</div></div>
+        <div class="stat"><div class="v">${trace.endedAt ? ((trace.endedAt - trace.startedAt) + 'ms') : '—'}</div><div class="k">duration</div></div>
+      `;
+      $('#stats').style.display = '';
+      $('#empty').style.display = 'none';
+      $('#counter').textContent = `${filtered.length}/${events.length}`;
+
+      const base = trace.startedAt;
+      $('#timeline').innerHTML = filtered.map((e) => {
+        const cls = `type-${e.type.replace(/\./g, '\\.')}`;
+        return `
+          <div class="event ${selectedIdx === e._idx ? 'selected' : ''}" data-idx="${e._idx}">
+            <div class="ts">${formatTs(e.ts, base)}</div>
+            <div><span class="type type-${e.type.replace(/\./g, '\\.')}">${e.type}</span></div>
+            <div class="summary">${escapeHtml(summarize(e))}</div>
+          </div>
+        `;
+      }).join('');
+
+      // populate type filter
+      const types = [...new Set(events.map((e) => e.type))].sort();
+      const cur = $('#filterType').value;
+      $('#filterType').innerHTML = '<option value="">All event types</option>' +
+        types.map((t) => `<option value="${t}" ${t === cur ? 'selected' : ''}>${t}</option>`).join('');
+    };
+
+    const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+
+    const showDetail = (idx) => {
+      selectedIdx = idx;
+      const e = trace.events[idx];
+      $('#details').innerHTML = `<pre>${escapeHtml(JSON.stringify(e, null, 2))}</pre>`;
+      render();
+    };
+
+    document.body.addEventListener('click', (ev) => {
+      const el = ev.target.closest('[data-idx]');
+      if (!el) return;
+      showDetail(parseInt(el.dataset.idx, 10));
+    });
+
+    const loadTrace = (text) => {
+      try {
+        trace = JSON.parse(text);
+        if (!trace.events || !Array.isArray(trace.events)) {
+          throw new Error('Not a harnesskit trace (missing events array)');
+        }
+        selectedIdx = -1;
+        render();
+      } catch (err) {
+        alert('Failed to parse trace: ' + err.message);
+      }
+    };
+
+    $('#fileInput').addEventListener('change', async (ev) => {
+      const file = ev.target.files[0];
+      if (!file) return;
+      loadTrace(await file.text());
+    });
+
+    ['filterType', 'filterSource', 'filterText'].forEach((id) =>
+      $('#' + id).addEventListener('input', render),
+    );
+
+    // Drag-and-drop
+    document.addEventListener('dragover', (e) => e.preventDefault());
+    document.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      const f = e.dataTransfer?.files?.[0];
+      if (!f) return;
+      loadTrace(await f.text());
+    });
+
+    // Demo trace for instant exploration
+    const DEMO_TRACE = {
+      sessionId: 'sess_demo',
+      startedAt: 0,
+      endedAt: 1300,
+      events: [
+        { type: 'session.start', ts: 0, ids: { sessionId: 'sess_demo', turnId: 't1' }, source: 'l1' },
+        { type: 'turn.start', ts: 50, ids: { sessionId: 'sess_demo', turnId: 't1' }, source: 'l1', provider: 'anthropic', model: 'claude-opus-4-7', request: { messages: [{ role: 'user', content: 'list /etc' }] } },
+        { type: 'turn.end', ts: 950, ids: { sessionId: 'sess_demo', turnId: 't1' }, source: 'l1', durationMs: 900, response: { content: [{ type: 'tool_use', id: 'toolu_a', name: 'shell', input: { cmd: 'ls /etc' } }], stopReason: 'tool_use' } },
+        { type: 'usage', ts: 950, ids: { sessionId: 'sess_demo', turnId: 't1' }, source: 'l1', usage: { inputTokens: 18, outputTokens: 9 } },
+        { type: 'tool.call.requested', ts: 951, ids: { sessionId: 'sess_demo', turnId: 't1', callId: 'toolu_a' }, source: 'l1', call: { id: 'toolu_a', name: 'shell', input: { cmd: 'ls /etc' } } },
+        { type: 'tool.call.denied', ts: 953, ids: { sessionId: 'sess_demo', turnId: 't1', callId: 'toolu_a' }, source: 'l1', call: { id: 'toolu_a', name: 'shell', input: { cmd: 'ls /etc' } }, reason: 'shell is denied', policyId: 'no-shell' },
+        { type: 'turn.start', ts: 1000, ids: { sessionId: 'sess_demo', turnId: 't2' }, source: 'l1', provider: 'anthropic', model: 'claude-opus-4-7', request: { messages: [{ role: 'user', content: 'list /etc' }, { role: 'assistant', content: '...' }, { role: 'user', content: '[harnesskit denied]...' }] } },
+        { type: 'turn.end', ts: 1280, ids: { sessionId: 'sess_demo', turnId: 't2' }, source: 'l1', durationMs: 280, response: { content: [{ type: 'text', text: "Sorry, I can't run shell." }], stopReason: 'end_turn' } },
+        { type: 'usage', ts: 1280, ids: { sessionId: 'sess_demo', turnId: 't2' }, source: 'l1', usage: { inputTokens: 28, outputTokens: 14 } },
+        { type: 'session.end', ts: 1300, ids: { sessionId: 'sess_demo', turnId: 't2' }, source: 'l1', reason: 'complete' },
+      ],
+    };
+
+    $('#loadDemo').addEventListener('click', () => {
+      trace = DEMO_TRACE;
+      selectedIdx = -1;
+      render();
+    });
+  </script>
+</body>
+</html>

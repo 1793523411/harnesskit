@@ -6,7 +6,16 @@
     "useIgnoreFile": true
   },
   "files": {
-    "ignore": ["dist", "node_modules", ".turbo", "coverage", ".claude", ".omc", "pnpm-lock.yaml"]
+    "ignore": [
+      "dist",
+      "node_modules",
+      ".turbo",
+      "coverage",
+      ".claude",
+      ".omc",
+      "pnpm-lock.yaml",
+      "apps/trace-viewer/index.html"
+    ]
   },
   "formatter": {
     "enabled": true,

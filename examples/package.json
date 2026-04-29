@@ -16,7 +16,9 @@
     "showcase-args": "tsx src/showcase-arg-regex.ts",
     "showcase-hostname": "tsx src/showcase-hostname.ts",
     "showcase-pii": "tsx src/showcase-pii.ts",
-    "showcases": "pnpm showcase && pnpm showcase-tokens && pnpm showcase-args && pnpm showcase-hostname && pnpm showcase-pii",
+    "showcase-multi-tenant": "tsx src/showcase-multi-tenant.ts",
+    "showcase-runner": "tsx src/showcase-runner.ts",
+    "showcases": "pnpm showcase && pnpm showcase-tokens && pnpm showcase-args && pnpm showcase-hostname && pnpm showcase-pii && pnpm showcase-multi-tenant && pnpm showcase-runner",
     "all": "pnpm quickstart && pnpm openai-quickstart && pnpm policy-and-eval && pnpm replay-eval",
     "typecheck": "tsc --noEmit",
     "build": "echo 'examples are run with tsx, no build needed'",
@@ -27,7 +29,8 @@
     "@harnesskit/core": "workspace:*",
     "@harnesskit/policy": "workspace:*",
     "@harnesskit/eval": "workspace:*",
-    "@harnesskit/provider-fetch": "workspace:*"
+    "@harnesskit/provider-fetch": "workspace:*",
+    "@harnesskit/runner": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.19.0"

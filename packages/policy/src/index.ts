@@ -10,6 +10,10 @@ export {
   argRegex,
   hostnameAllowlist,
   piiScan,
+  outputContentRegex,
+  outputPiiScan,
+  costBudget,
+  reasoningBudget,
 } from './builtins.js';
 export type {
   RequireApprovalOptions,
@@ -18,6 +22,11 @@ export type {
   HostnameAllowlistOptions,
   PiiScanOptions,
   PiiPatternName,
+  OutputContentRegexOptions,
+  OutputPiiScanOptions,
+  CostBudgetOptions,
+  CostPricer,
+  ReasoningBudgetOptions,
 } from './builtins.js';
 
 export { combinePolicies, allOf, anyOf } from './combinator.js';

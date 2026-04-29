@@ -18,7 +18,7 @@ const isOpenAIShape = (body: unknown): body is OpenAIRequest =>
   Array.isArray((body as { messages: unknown }).messages);
 
 const sharedImpl = {
-  parseRequest: (body: unknown) => (isOpenAIShape(body) ? body : undefined),
+  parseRequest: (body: unknown, _ctx: { url: URL }) => (isOpenAIShape(body) ? body : undefined),
   applyDeny: (req: unknown, denied: ReadonlyMap<string, string>) =>
     applyDenyRewrites(req as OpenAIRequest, denied),
   serializeRequest: (req: unknown) => JSON.stringify(req),

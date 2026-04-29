@@ -16,6 +16,8 @@ Pick the order that fits your goal:
 | [Evaluation](./eval.md) | 10 min | `TraceRecorder`, scorers, replay, JSON round-trip |
 | [Framework adapters (L2)](./adapters.md) | 15 min | Claude Agent SDK, OpenAI Agents, Vercel AI integration |
 | [Recipes](./recipes.md) | 10 min | Common patterns: audit, approval, budget, multi-tenant |
+| [Runner](./runner.md) | 5 min | `runAgent({...})` — 30-line agent loops with full harness wiring |
+| [OpenTelemetry](./otel.md) | 5 min | Map AgentEvents to OTel spans for production observability |
 
 ## Working examples
 

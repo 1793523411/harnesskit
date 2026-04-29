@@ -1,4 +1,5 @@
 import type { AgentEvent, ToolCallRequestedEvent, UsageEvent } from '@harnesskit/core';
+import { EventBus } from '@harnesskit/core';
 import { describe, expect, it } from 'vitest';
 import {
   allOf,
@@ -6,13 +7,18 @@ import {
   anyOf,
   argRegex,
   combinePolicies,
+  costBudget,
   denyTools,
   hostnameAllowlist,
   matchAny,
   matchPattern,
   maxToolCalls,
+  outputContentRegex,
+  outputPiiScan,
   piiScan,
   policy,
+  policyToInterceptor,
+  reasoningBudget,
   requireApproval,
   tokenBudget,
 } from './index.js';
@@ -257,6 +263,110 @@ describe('piiScan', () => {
     const p = piiScan();
     const d = await p.decide(toolEvt('webhook', { recipients: ['ok@x.com', 'normal text'] }));
     expect(d.allow).toBe(false);
+  });
+});
+
+describe('outputContentRegex', () => {
+  it('emits error event when matched in tool result', async () => {
+    const bus = new EventBus();
+    const events: AgentEvent[] = [];
+    bus.use({ on: (e) => void events.push(e) });
+    bus.use(outputContentRegex({ pattern: /Bearer [A-Z0-9]+/ }));
+    await bus.emit({
+      type: 'tool.call.resolved',
+      ts: 1,
+      ids: { ...ids, callId: 'c' },
+      source: 'l1',
+      call: { id: 'c', name: 'fetch', input: {} },
+      result: { content: 'header: Bearer ABC123XYZ' },
+    });
+    const err = events.find((e) => e.type === 'error');
+    expect(err).toBeDefined();
+    if (err?.type !== 'error') throw new Error('wrong');
+    expect(err.message).toContain('Bearer ABC123XYZ');
+  });
+
+  it('does not emit when no match', async () => {
+    const bus = new EventBus();
+    const events: AgentEvent[] = [];
+    bus.use({ on: (e) => void events.push(e) });
+    bus.use(outputContentRegex({ pattern: /SECRET/ }));
+    await bus.emit({
+      type: 'tool.call.resolved',
+      ts: 1,
+      ids: { ...ids, callId: 'c' },
+      source: 'l1',
+      call: { id: 'c', name: 'fetch', input: {} },
+      result: { content: 'all clean' },
+    });
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+  });
+});
+
+describe('outputPiiScan', () => {
+  it('flags PII in tool output', async () => {
+    const bus = new EventBus();
+    const events: AgentEvent[] = [];
+    bus.use({ on: (e) => void events.push(e) });
+    bus.use(outputPiiScan({ patterns: ['email'] }));
+    await bus.emit({
+      type: 'tool.call.resolved',
+      ts: 1,
+      ids: { ...ids, callId: 'c' },
+      source: 'l1',
+      call: { id: 'c', name: 'fetch', input: {} },
+      result: { content: 'user contact: alice@example.com' },
+    });
+    const err = events.find((e) => e.type === 'error');
+    if (err?.type !== 'error') throw new Error('expected error');
+    expect(err.message).toContain('alice@example.com');
+  });
+});
+
+describe('costBudget', () => {
+  it('observes usage cost and denies when exceeded', async () => {
+    const p = costBudget({
+      totalUsd: 0.005,
+      pricer: (u) => (u.inputTokens ?? 0) * 0.000001 + (u.outputTokens ?? 0) * 0.00001,
+    });
+    expect(await p.decide(toolEvt('x'))).toEqual({ allow: true });
+    await p.observe?.(usageEvt(1000, 500)); // $0.001 + $0.005 = $0.006 > $0.005
+    const d = await p.decide(toolEvt('x'));
+    expect(d.allow).toBe(false);
+    expect(d.reason).toContain('cost budget $0.005 exceeded');
+  });
+
+  it('falls back to usage.costUsd when no pricer provided', async () => {
+    const p = costBudget({ totalUsd: 1 });
+    await p.observe?.({
+      type: 'usage',
+      ts: 1,
+      ids,
+      source: 'l1',
+      usage: { costUsd: 1.5 },
+    });
+    const d = await p.decide(toolEvt('x'));
+    expect(d.allow).toBe(false);
+  });
+});
+
+describe('reasoningBudget', () => {
+  it('caps cumulative thinking content', async () => {
+    const p = reasoningBudget({ chars: 100 });
+    expect(await p.decide(toolEvt('x'))).toEqual({ allow: true });
+    await p.observe?.({
+      type: 'turn.end',
+      ts: 1,
+      ids,
+      source: 'l1',
+      durationMs: 0,
+      response: {
+        content: [{ type: 'thinking', text: 'x'.repeat(150) }],
+      },
+    });
+    const d = await p.decide(toolEvt('x'));
+    expect(d.allow).toBe(false);
+    expect(d.reason).toContain('reasoning budget 100 chars exceeded');
   });
 });
 

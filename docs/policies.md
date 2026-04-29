@@ -87,6 +87,45 @@ hostnameAllowlist({
 // denies  https://evil.com/...
 ```
 
+### `costBudget({ totalUsd, pricer? })`
+
+Cumulative session cost cap. The pricer maps `UsageInfo` → USD; default reads `usage.costUsd` if your provider sets it.
+
+```ts
+costBudget({
+  totalUsd: 5.00,
+  pricer: (u) =>
+    (u.inputTokens ?? 0) * 0.000003 +    // $3 / 1M input
+    (u.outputTokens ?? 0) * 0.000015,    // $15 / 1M output
+});
+```
+
+### `reasoningBudget({ chars })`
+
+Caps cumulative `thinking`-block character count per session. Useful against runaway chain-of-thought from reasoning models (DeepSeek-Reasoner, Claude thinking, Gemini 2.5 thought, etc).
+
+```ts
+reasoningBudget({ chars: 50_000 });
+```
+
+### `outputContentRegex({ pattern, message?, tools? })` (Interceptor)
+
+Audit-only: scans `tool.call.resolved` content for a regex match and emits an `error` event when it fires. Use to flag secrets / API tokens leaking through tool results.
+
+```ts
+import { outputContentRegex } from '@harnesskit/policy';
+bus.use(outputContentRegex({ pattern: /Bearer [A-Z0-9]+/, message: 'API token in tool output' }));
+```
+
+### `outputPiiScan({ patterns?, tools? })` (Interceptor)
+
+Audit-only: same as `piiScan` but observes `tool.call.resolved` content (what the model is about to see). Pair with `piiScan` for both directions.
+
+```ts
+import { outputPiiScan } from '@harnesskit/policy';
+bus.use(outputPiiScan({ patterns: ['email', 'ssn'] }));
+```
+
 ### `piiScan({ patterns?, tools?, id? })`
 
 Recursively scans the `input` of tool calls for PII patterns. Supports built-in pattern names and arbitrary `RegExp`. Default: `['email', 'ssn', 'creditcard']` across all tools.
