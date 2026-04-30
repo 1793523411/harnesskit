@@ -22,6 +22,14 @@ import { type InterceptorState, createState } from './state.js';
 
 export type { ProviderTag, ToolResultRewriter } from './providers/types.js';
 
+/**
+ * Marker stamped on the wrapped fetch so the diagnostic helper can check
+ * whether `installFetchInterceptor` has already run against a target. Symbol
+ * is `Symbol.for(...)` so independent module copies still see the same
+ * marker (helps when packages are duplicated in node_modules).
+ */
+export const HARNESSKIT_PATCHED = Symbol.for('harnesskit.fetchPatched');
+
 export interface FetchInterceptorOptions {
   bus: EventBus;
   /** Which providers to recognize. Default: all built-in. */
@@ -497,6 +505,7 @@ export const installFetchInterceptor = (opts: FetchInterceptorOptions): (() => v
     });
   };
 
+  (wrapped as unknown as Record<symbol, boolean>)[HARNESSKIT_PATCHED] = true;
   target.fetch = wrapped;
   return () => {
     target.fetch = original;
