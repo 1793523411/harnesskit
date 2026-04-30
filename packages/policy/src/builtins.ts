@@ -485,6 +485,102 @@ export interface ReasoningBudgetOptions {
   id?: string;
 }
 
+// ── Rate limiting ──────────────────────────────────────────────────────
+
+interface SlidingEntry {
+  ts: number;
+  value: number;
+}
+
+class SlidingWindow {
+  private entries: SlidingEntry[] = [];
+
+  add(ts: number, value: number): void {
+    this.entries.push({ ts, value });
+  }
+
+  sumWithin(now: number, windowMs: number): number {
+    const cutoff = now - windowMs;
+    let i = 0;
+    while (i < this.entries.length && this.entries[i]!.ts < cutoff) i++;
+    if (i > 0) this.entries.splice(0, i);
+    let total = 0;
+    for (const e of this.entries) total += e.value;
+    return total;
+  }
+}
+
+export interface RateLimitOptions {
+  /** Max input + output tokens per rolling 60s window. */
+  tokensPerMin?: number;
+  /** Max model API calls (turn.start) per rolling 60s window. */
+  requestsPerMin?: number;
+  /** Override the rolling window length. Default 60_000ms. */
+  windowMs?: number;
+  /**
+   * Default reads `Date.now()`. Override for deterministic tests or to use a
+   * monotonic clock. Receives nothing, returns current ms timestamp.
+   */
+  now?: () => number;
+  id?: string;
+}
+
+/**
+ * Sliding-window rate limit. Tracks token usage (from `usage` events) and
+ * request count (from `turn.start` events) over a rolling window — by default
+ * 60s. When a `tool.call.requested` would push the agent past either cap on
+ * the *next* turn, denies the call.
+ *
+ * Why deny on tool.call.requested specifically: the agent loop runs a tool
+ * call → next turn. Denying the tool call is the closest we can get to "stop
+ * before issuing another model API call" with the events we already have.
+ *
+ * Use alongside or instead of `tokenBudget` (which caps totals, not rate).
+ */
+export const rateLimit = (opts: RateLimitOptions): Policy => {
+  if (opts.tokensPerMin === undefined && opts.requestsPerMin === undefined) {
+    throw new Error('rateLimit: at least one of tokensPerMin / requestsPerMin must be set');
+  }
+  const windowMs = opts.windowMs ?? 60_000;
+  const now = opts.now ?? Date.now;
+  const tokenWindow = new SlidingWindow();
+  const requestWindow = new SlidingWindow();
+  return {
+    id: opts.id ?? 'rate-limit',
+    description: `${opts.tokensPerMin ?? '∞'} tokens/${opts.requestsPerMin ?? '∞'} requests per ${windowMs}ms window`,
+    observe(e: AgentEvent) {
+      if (e.type === 'usage') {
+        const total = (e.usage.inputTokens ?? 0) + (e.usage.outputTokens ?? 0);
+        if (total > 0) tokenWindow.add(now(), total);
+      } else if (e.type === 'turn.start') {
+        requestWindow.add(now(), 1);
+      }
+    },
+    decide(_e: GateableEvent): PolicyDecision {
+      const t = now();
+      if (opts.tokensPerMin !== undefined) {
+        const used = tokenWindow.sumWithin(t, windowMs);
+        if (used >= opts.tokensPerMin) {
+          return {
+            allow: false,
+            reason: `rate limit: ${used} tokens used in last ${windowMs}ms (cap ${opts.tokensPerMin})`,
+          };
+        }
+      }
+      if (opts.requestsPerMin !== undefined) {
+        const used = requestWindow.sumWithin(t, windowMs);
+        if (used >= opts.requestsPerMin) {
+          return {
+            allow: false,
+            reason: `rate limit: ${used} requests in last ${windowMs}ms (cap ${opts.requestsPerMin})`,
+          };
+        }
+      }
+      return { allow: true };
+    },
+  };
+};
+
 /**
  * Caps cumulative reasoning-block character count per session. Useful against
  * runaway chain-of-thought from reasoning models.

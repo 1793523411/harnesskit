@@ -15,6 +15,7 @@ export {
   redactPiiInToolResults,
   costBudget,
   reasoningBudget,
+  rateLimit,
 } from './builtins.js';
 export type {
   RequireApprovalOptions,
@@ -29,6 +30,7 @@ export type {
   CostBudgetOptions,
   CostPricer,
   ReasoningBudgetOptions,
+  RateLimitOptions,
 } from './builtins.js';
 
 export { combinePolicies, allOf, anyOf } from './combinator.js';

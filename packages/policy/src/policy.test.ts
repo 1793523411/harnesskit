@@ -18,6 +18,7 @@ import {
   piiScan,
   policy,
   policyToInterceptor,
+  rateLimit,
   reasoningBudget,
   redactPiiInToolResults,
   requireApproval,
@@ -435,6 +436,70 @@ describe('reasoningBudget', () => {
     const d = await p.decide(toolEvt('x'));
     expect(d.allow).toBe(false);
     expect(d.reason).toContain('reasoning budget 100 chars exceeded');
+  });
+});
+
+describe('rateLimit', () => {
+  const turnStart = (ts: number): AgentEvent => ({
+    type: 'turn.start',
+    ts,
+    ids,
+    source: 'l1',
+    provider: 'openai',
+    model: 'gpt-4o',
+    request: { messages: [] },
+  });
+
+  const usageEvtAt = (ts: number, input: number, output: number): AgentEvent => ({
+    type: 'usage',
+    ts,
+    ids,
+    source: 'l1',
+    usage: { inputTokens: input, outputTokens: output },
+  });
+
+  it('throws when both tokensPerMin and requestsPerMin are missing', () => {
+    expect(() => rateLimit({})).toThrow(/at least one of tokensPerMin/);
+  });
+
+  it('denies tool calls once token usage exceeds the per-window cap', async () => {
+    let clock = 1_000_000;
+    const p = rateLimit({ tokensPerMin: 1000, now: () => clock });
+    expect(await p.decide(toolEvt('x'))).toEqual({ allow: true });
+    await p.observe?.(usageEvtAt(clock, 600, 0));
+    expect(await p.decide(toolEvt('x'))).toEqual({ allow: true });
+    await p.observe?.(usageEvtAt(clock, 500, 0));
+    const d = await p.decide(toolEvt('x'));
+    expect(d.allow).toBe(false);
+    expect(d.reason).toContain('1100 tokens used');
+  });
+
+  it('expires entries outside the rolling window', async () => {
+    let clock = 100;
+    const p = rateLimit({ tokensPerMin: 100, now: () => clock, windowMs: 60_000 });
+    await p.observe?.(usageEvtAt(clock, 200, 0));
+    expect((await p.decide(toolEvt('x'))).allow).toBe(false);
+    // 61s later — the prior usage drops out of the window
+    clock += 61_000;
+    expect((await p.decide(toolEvt('x'))).allow).toBe(true);
+  });
+
+  it('counts turn.start events for the requestsPerMin cap', async () => {
+    let clock = 0;
+    const p = rateLimit({ requestsPerMin: 3, now: () => clock });
+    for (let i = 0; i < 3; i++) await p.observe?.(turnStart(clock));
+    const d = await p.decide(toolEvt('x'));
+    expect(d.allow).toBe(false);
+    expect(d.reason).toContain('3 requests');
+  });
+
+  it('respects custom windowMs (e.g. 1s burst limits)', async () => {
+    let clock = 0;
+    const p = rateLimit({ requestsPerMin: 5, windowMs: 1_000, now: () => clock });
+    for (let i = 0; i < 5; i++) await p.observe?.(turnStart(clock));
+    expect((await p.decide(toolEvt('x'))).allow).toBe(false);
+    clock += 1_500;
+    expect((await p.decide(toolEvt('x'))).allow).toBe(true);
   });
 });
 

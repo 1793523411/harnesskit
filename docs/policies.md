@@ -108,6 +108,23 @@ Caps cumulative `thinking`-block character count per session. Useful against run
 reasoningBudget({ chars: 50_000 });
 ```
 
+### `rateLimit({ tokensPerMin?, requestsPerMin?, windowMs?, now? })`
+
+Sliding-window rate limit. Tracks input+output tokens (from `usage` events) and request count (from `turn.start` events) over a rolling window. When a `tool.call.requested` arrives, denies the call if the window has saturated either cap — which stops the agent loop from issuing another model request.
+
+```ts
+import { rateLimit } from '@harnesskit/policy';
+
+bus.use(policyToInterceptor(
+  rateLimit({
+    tokensPerMin: 60_000,    // Anthropic's free-tier daily cap divided by minutes per day, or whatever your provider tells you
+    requestsPerMin: 100,
+  }),
+));
+```
+
+Different from `tokenBudget` (which caps **totals** for the session) and `costBudget` (which caps **dollars**). Use whichever matches what your provider's 429 message complains about. `windowMs` defaults to 60_000; pass a smaller value for burst protection (e.g. `windowMs: 1_000, requestsPerMin: 10` ≈ 10 RPS). `now` overrides the clock for tests.
+
 ### `outputContentRegex({ pattern, message?, tools? })` (Interceptor)
 
 Audit-only: scans `tool.call.resolved` content for a regex match and emits an `error` event when it fires. Use to flag secrets / API tokens leaking through tool results.
