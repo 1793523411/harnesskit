@@ -77,12 +77,12 @@ For real prevention (e.g., model emits `shell rm -rf /`, host SDK is going to ac
 
 ## Smaller improvements queued
 
-- Trace viewer: comparison mode (two traces side-by-side, diff'd).
-- Replay: support time-shifting (replay at original wall-clock pace) for live UI demos.
-- Bedrock per-model `/invoke` dispatcher.
+- Bedrock per-model `/invoke` dispatcher (planning doc: `docs/notes/bedrock-invoke-todo.md`).
 
 ## Recently shipped
 
+- **Trace viewer comparison mode** — load two traces, get a side-by-side timeline plus a top "diff bar" with deltas (events, turns, tool calls, denied, tokens, errors, duration). Color: green = improvement, red = regression. Each side keeps its own session-collapse state. Click any event from either side to inspect it (the detail pane shows which side it came from).
+- **Trace viewer replay (time-shifted)** — single-trace mode adds a Play/Pause + speed selector (0.25× / 1× / 4× / instant). When playing, future events fade to 18% opacity, the event under the cursor gets an accent border, and the detail pane auto-advances. The cursor label shows `t=<ms>/<total>ms`. Disabled in compare mode (one timeline at a time).
 - **Trace viewer tree view + keyboard nav** — `apps/trace-viewer/index.html` gains a Flat/Tree toggle. In Tree mode, sessions group together with child agents nested under their `subagent.spawn` parent (recursive — N levels deep). `j`/`k` navigate between events, scrolling the selected one into view. Session headers collapse on click. The bundled demo trace now includes a parent → child research-agent spawn so you can see tree mode work without loading a real trace.
 - **Bedrock `/converse-stream` Event Stream parser** — full binary-framing parser in `providers/bedrock/eventstream.ts`. Mid-stream cancel on toolUse completion. Server `exception` frames surface as `error` events. CRC validation is best-effort — we frame, we don't validate.
 - **AWS Bedrock Converse API** — detect, normalize, deny rewrite, content rewrite all live. Pair with `signRequest` for Sig V4. Both `/converse` (non-streaming) and `/converse-stream` (streaming) work fully now. Showcase: `examples/src/showcase-bedrock.ts`.

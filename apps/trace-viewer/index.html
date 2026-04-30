@@ -66,6 +66,13 @@
       gap: 0;
       height: calc(100% - 53px);
     }
+    main.compare {
+      grid-template-columns: 1fr 1fr 380px;
+    }
+    main.compare ~ #diffBar { display: flex; }
+    body:has(#diffBar:not([style*="none"])) main {
+      height: calc(100% - 53px - 44px);
+    }
     .left { padding: 16px; overflow: auto; }
     .right {
       border-left: 1px solid var(--border);
@@ -203,6 +210,45 @@
       margin-top: 16px;
     }
     code { color: var(--yellow); }
+
+    /* compare mode */
+    .compare-pane { padding: 16px; overflow: auto; }
+    .compare-pane.cmpA { border-right: 1px dashed var(--border); }
+    .compare-pane h3 {
+      font-size: 11px;
+      color: var(--muted);
+      margin: 0 0 12px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .diff-bar {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding: 10px 16px;
+      background: #14171f;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+    }
+    .diff-bar .label { color: var(--muted); }
+    .diff-bar .delta-up { color: var(--green); }
+    .diff-bar .delta-down { color: var(--red); }
+    .diff-bar .delta-zero { color: var(--muted); }
+
+    /* replay */
+    .replay-controls { display: flex; gap: 4px; align-items: center; }
+    .replay-controls button {
+      padding: 4px 10px;
+      min-width: 32px;
+      font-size: 13px;
+    }
+    .replay-cursor-label {
+      color: var(--accent);
+      font-size: 11px;
+      min-width: 90px;
+    }
+    .event.future { opacity: 0.18; pointer-events: none; }
+    .event.replay-cursor { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   </style>
 </head>
 <body>
@@ -213,6 +259,11 @@
         Open trace.json
         <input type="file" id="fileInput" accept=".json,.jsonl,application/json" />
       </label>
+      <label class="file-btn" id="fileBtnB" style="display:none;">
+        Compare with…
+        <input type="file" id="fileInputB" accept=".json,.jsonl,application/json" />
+      </label>
+      <button id="closeCompare" style="display:none;">× Close compare</button>
       <button id="loadDemo">Load demo trace</button>
       <select id="filterType">
         <option value="">All event types</option>
@@ -227,12 +278,24 @@
         <option value="tree">Tree</option>
       </select>
       <input type="text" id="filterText" placeholder="search… (j/k to navigate)" />
+      <span class="replay-controls" id="replayControls" style="display:none">
+        <button id="btnReplayReset" title="rewind">⏮</button>
+        <button id="btnReplayPlay" title="play / pause">▶</button>
+        <select id="replaySpeed" title="replay speed">
+          <option value="0.25">0.25×</option>
+          <option value="1" selected>1×</option>
+          <option value="4">4×</option>
+          <option value="999">instant</option>
+        </select>
+        <span id="replayCursorLabel" class="replay-cursor-label">paused</span>
+      </span>
       <span style="color: var(--muted); margin-left: auto;">
         <span id="counter"></span>
       </span>
     </div>
   </header>
-  <main>
+  <div id="diffBar" class="diff-bar" style="display:none"></div>
+  <main id="mainArea">
     <div class="left" id="left">
       <div class="empty" id="empty">
         <p>Drop a trace JSON to inspect.</p>
@@ -245,6 +308,11 @@
       <div class="stats" id="stats" style="display:none"></div>
       <div class="timeline" id="timeline"></div>
     </div>
+    <div class="compare-pane cmpB" id="paneB" style="display:none">
+      <h3 id="paneBLabel">TRACE B</h3>
+      <div class="stats" id="statsB"></div>
+      <div class="timeline" id="timelineB"></div>
+    </div>
     <aside class="right">
       <h2>EVENT DETAILS</h2>
       <div id="details"><p style="color: var(--muted);">Click an event in the timeline to inspect.</p></div>
@@ -254,7 +322,18 @@
   <script type="module">
     const $ = (sel) => document.querySelector(sel);
     let trace = null;
+    let traceB = null;
+    /**
+     * selectedIdx encodes both side and event index. Strings:
+     *   'a:42' — event 42 in trace A
+     *   'b:7'  — event 7 in trace B
+     * For backward compatibility a bare integer also means trace A.
+     */
     let selectedIdx = -1;
+    /** Replay state. cursor is ms offset from trace.startedAt. */
+    let replayCursor = -1; // -1 = no replay active
+    let replayInterval = null;
+    let replayLastTick = 0;
 
     const formatTs = (ts, base) => {
       const offset = base !== undefined ? ts - base : ts;
@@ -305,24 +384,35 @@
       return { denied, toolCalls, inTokens, outTokens, errors, turns };
     };
 
-    const render = () => {
-      const events = trace?.events ?? [];
+    const filterEvents = (events, side) => {
       const filterType = $('#filterType').value;
       const filterSource = $('#filterSource').value;
       const filterText = $('#filterText').value.toLowerCase();
-      const filtered = events.filter((e, i) => {
+      // Replay only applies to trace A and only when traceB isn't loaded.
+      const replayActive = !traceB && replayCursor >= 0;
+      const baseTs = (side === 'b' ? traceB?.startedAt : trace?.startedAt) ?? 0;
+      return events.filter((e, i) => {
         if (filterType && e.type !== filterType) return false;
         if (filterSource && e.source !== filterSource) return false;
         if (filterText) {
           const blob = JSON.stringify(e).toLowerCase();
           if (!blob.includes(filterText)) return false;
         }
+        if (replayActive && side === 'a') {
+          // Past events show normally; future events show muted (.future).
+          // We keep them in the filtered list so navigation indexing stays
+          // stable; the row class is applied in eventRowHtml.
+        }
         e._idx = i;
+        e._side = side;
+        e._tsOffset = e.ts - baseTs;
         return true;
       });
+    };
 
+    const renderStats = (target, events, t) => {
       const stats = computeStats(events);
-      $('#stats').innerHTML = `
+      target.innerHTML = `
         <div class="stat"><div class="v">${events.length}</div><div class="k">events</div></div>
         <div class="stat"><div class="v">${stats.turns}</div><div class="k">turns</div></div>
         <div class="stat"><div class="v">${stats.toolCalls}</div><div class="k">tool calls</div></div>
@@ -330,35 +420,110 @@
         <div class="stat"><div class="v">${stats.inTokens.toLocaleString()}</div><div class="k">input tokens</div></div>
         <div class="stat"><div class="v">${stats.outTokens.toLocaleString()}</div><div class="k">output tokens</div></div>
         <div class="stat"><div class="v" style="color: var(--red)">${stats.errors}</div><div class="k">errors</div></div>
-        <div class="stat"><div class="v">${trace.endedAt ? ((trace.endedAt - trace.startedAt) + 'ms') : '—'}</div><div class="k">duration</div></div>
+        <div class="stat"><div class="v">${t.endedAt ? ((t.endedAt - t.startedAt) + 'ms') : '—'}</div><div class="k">duration</div></div>
       `;
-      $('#stats').style.display = '';
-      $('#empty').style.display = 'none';
-      $('#counter').textContent = `${filtered.length}/${events.length}`;
+      return stats;
+    };
 
-      const base = trace.startedAt;
-      const viewMode = $('#viewMode').value;
-      $('#timeline').innerHTML =
-        viewMode === 'tree' ? renderTree(filtered, base) : renderFlat(filtered, base);
+    const fmtDelta = (n, redIfPositive = false) => {
+      if (n === 0) return `<span class="delta-zero">±0</span>`;
+      const cls = redIfPositive ? (n > 0 ? 'delta-down' : 'delta-up') : (n > 0 ? 'delta-up' : 'delta-down');
+      return `<span class="${cls}">${n > 0 ? '+' : ''}${n.toLocaleString()}</span>`;
+    };
 
-      // populate type filter
-      const types = [...new Set(events.map((e) => e.type))].sort();
+    const renderDiffBar = (sa, sb, ta, tb) => {
+      const durA = ta?.endedAt && ta?.startedAt ? ta.endedAt - ta.startedAt : 0;
+      const durB = tb?.endedAt && tb?.startedAt ? tb.endedAt - tb.startedAt : 0;
+      $('#diffBar').innerHTML = `
+        <span class="label">DIFF (B − A):</span>
+        <span><span class="label">events</span> ${fmtDelta((tb.events.length - ta.events.length))}</span>
+        <span><span class="label">turns</span> ${fmtDelta(sb.turns - sa.turns)}</span>
+        <span><span class="label">tool calls</span> ${fmtDelta(sb.toolCalls - sa.toolCalls)}</span>
+        <span><span class="label">denied</span> ${fmtDelta(sb.denied - sa.denied, true)}</span>
+        <span><span class="label">in toks</span> ${fmtDelta(sb.inTokens - sa.inTokens, true)}</span>
+        <span><span class="label">out toks</span> ${fmtDelta(sb.outTokens - sa.outTokens, true)}</span>
+        <span><span class="label">errors</span> ${fmtDelta(sb.errors - sa.errors, true)}</span>
+        <span><span class="label">Δduration</span> ${fmtDelta(durB - durA, true)}ms</span>
+      `;
+    };
+
+    const populateTypeFilter = () => {
+      const allEvents = [
+        ...(trace?.events ?? []),
+        ...(traceB?.events ?? []),
+      ];
+      const types = [...new Set(allEvents.map((e) => e.type))].sort();
       const cur = $('#filterType').value;
       $('#filterType').innerHTML = '<option value="">All event types</option>' +
         types.map((t) => `<option value="${t}" ${t === cur ? 'selected' : ''}>${t}</option>`).join('');
+    };
+
+    const render = () => {
+      if (!trace) return;
+      const events = trace.events ?? [];
+      const filteredA = filterEvents(events, 'a');
+      const statsA = renderStats($('#stats'), events, trace);
+      $('#stats').style.display = '';
+      $('#empty').style.display = 'none';
+
+      const baseA = trace.startedAt;
+      const viewMode = $('#viewMode').value;
+      $('#timeline').innerHTML =
+        viewMode === 'tree' ? renderTree(filteredA, baseA, 'a') : renderFlat(filteredA, baseA);
+
+      const compare = traceB !== null;
+      $('#mainArea').classList.toggle('compare', compare);
+      $('#paneB').style.display = compare ? '' : 'none';
+      $('#diffBar').style.display = compare ? '' : 'none';
+      $('#closeCompare').style.display = compare ? '' : 'none';
+      // Replay only available in single-trace mode.
+      $('#replayControls').style.display = compare ? 'none' : '';
+
+      if (compare) {
+        const eventsB = traceB.events ?? [];
+        const filteredB = filterEvents(eventsB, 'b');
+        const statsB = renderStats($('#statsB'), eventsB, traceB);
+        const baseB = traceB.startedAt;
+        $('#timelineB').innerHTML =
+          viewMode === 'tree' ? renderTree(filteredB, baseB, 'b') : renderFlat(filteredB, baseB);
+        renderDiffBar(statsA, statsB, trace, traceB);
+        $('#counter').textContent = `A:${filteredA.length}/${events.length} · B:${filteredB.length}/${eventsB.length}`;
+      } else {
+        $('#counter').textContent = `${filteredA.length}/${events.length}`;
+      }
+
+      populateTypeFilter();
+      updateReplayCursorLabel();
     };
 
     const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[c]));
 
-    const eventRowHtml = (e, base) => `
-      <div class="event ${selectedIdx === e._idx ? 'selected' : ''}" data-idx="${e._idx}">
-        <div class="ts">${formatTs(e.ts, base)}</div>
-        <div><span class="type type-${e.type.replace(/\./g, '\\.')}">${e.type}</span></div>
-        <div class="summary">${escapeHtml(summarize(e))}</div>
-      </div>
-    `;
+    const composeIdx = (side, i) => `${side}:${i}`;
+
+    const eventRowHtml = (e, base) => {
+      const id = composeIdx(e._side ?? 'a', e._idx);
+      const isSelected = String(selectedIdx) === id;
+      const isFuture = e._side === 'a' && replayCursor >= 0 && e._tsOffset > replayCursor;
+      const isCursorEvent =
+        !isFuture && e._side === 'a' && replayCursor >= 0 && Math.abs(e._tsOffset - replayCursor) <= 200;
+      const cls = [
+        'event',
+        isSelected ? 'selected' : '',
+        isFuture ? 'future' : '',
+        isCursorEvent ? 'replay-cursor' : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      return `
+        <div class="${cls}" data-idx="${id}">
+          <div class="ts">${formatTs(e.ts, base)}</div>
+          <div><span class="type type-${e.type.replace(/\./g, '\\.')}">${e.type}</span></div>
+          <div class="summary">${escapeHtml(summarize(e))}</div>
+        </div>
+      `;
+    };
 
     const renderFlat = (filtered, base) => filtered.map((e) => eventRowHtml(e, base)).join('');
 
@@ -375,8 +540,8 @@
      * structure stays visible — toggle the type/source filters and the
      * session header still shows you what was there.
      */
-    const renderTree = (filtered, base) => {
-      const allEvents = trace?.events ?? [];
+    const renderTree = (filtered, base, side = 'a') => {
+      const allEvents = (side === 'b' ? traceB?.events : trace?.events) ?? [];
       const sessions = new Map(); // sessionId -> { id, parent, children: [], events: [], firstTs, providerLabel }
       const ensure = (sid) => {
         if (!sessions.has(sid)) {
@@ -421,7 +586,8 @@
         .sort((a, b) => a.firstTs - b.firstTs);
 
       const renderNode = (s, depth) => {
-        const isCollapsed = collapsedSessions.has(s.id);
+        const collapseKey = `${side}:${s.id}`;
+        const isCollapsed = collapsedSessions.has(collapseKey);
         const childIds = [...new Set(s.children)].sort((a, b) => {
           const aTs = sessions.get(a)?.firstTs ?? 0;
           const bTs = sessions.get(b)?.firstTs ?? 0;
@@ -436,7 +602,7 @@
         const eventsHtml = s.events.map((e) => eventRowHtml(e, base)).join('');
         return `
           <div class="session-group" data-depth="${depth}">
-            <div class="session-header" data-session="${escapeHtml(s.id)}">
+            <div class="session-header" data-session="${escapeHtml(collapseKey)}">
               <span class="toggle">${isCollapsed ? '▸' : '▾'}</span>
               <span class="session-id">${escapeHtml(s.id.slice(0, 24))}</span>
               <span class="session-meta">${escapeHtml(meta)}</span>
@@ -451,25 +617,117 @@
       return roots.map((r) => renderNode(r, 0)).join('');
     };
 
+    const parseIdx = (idStr) => {
+      const s = String(idStr);
+      if (s.includes(':')) {
+        const [side, n] = s.split(':');
+        return { side, idx: parseInt(n, 10) };
+      }
+      // Legacy: bare integer = trace A.
+      return { side: 'a', idx: parseInt(s, 10) };
+    };
+
     const navigate = (dir) => {
-      const visibleIdxs = [...document.querySelectorAll('[data-idx]')].map((el) =>
-        parseInt(el.dataset.idx, 10),
+      const visible = [...document.querySelectorAll('[data-idx]:not(.future)')].map(
+        (el) => el.dataset.idx,
       );
-      if (visibleIdxs.length === 0) return;
-      const cur = visibleIdxs.indexOf(selectedIdx);
-      const nextPos = cur === -1 ? 0 : Math.max(0, Math.min(visibleIdxs.length - 1, cur + dir));
-      const nextIdx = visibleIdxs[nextPos];
-      showDetail(nextIdx);
-      const el = document.querySelector(`[data-idx="${nextIdx}"]`);
+      if (visible.length === 0) return;
+      const cur = visible.indexOf(String(selectedIdx));
+      const nextPos = cur === -1 ? 0 : Math.max(0, Math.min(visible.length - 1, cur + dir));
+      const nextId = visible[nextPos];
+      showDetail(nextId);
+      const el = document.querySelector(`[data-idx="${nextId}"]`);
       if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     };
 
-    const showDetail = (idx) => {
-      selectedIdx = idx;
-      const e = trace.events[idx];
-      $('#details').innerHTML = `<pre>${escapeHtml(JSON.stringify(e, null, 2))}</pre>`;
+    const showDetail = (idStr) => {
+      selectedIdx = idStr;
+      const { side, idx } = parseIdx(idStr);
+      const sourceTrace = side === 'b' ? traceB : trace;
+      const e = sourceTrace?.events?.[idx];
+      if (!e) return;
+      const sideLabel = traceB ? `<div style="color:var(--muted);font-size:11px;margin-bottom:8px;">FROM ${side.toUpperCase()}</div>` : '';
+      $('#details').innerHTML = `${sideLabel}<pre>${escapeHtml(JSON.stringify(e, null, 2))}</pre>`;
       render();
     };
+
+    /* ───────── replay ───────── */
+
+    const updateReplayCursorLabel = () => {
+      const label = $('#replayCursorLabel');
+      if (!label) return;
+      if (replayCursor < 0) {
+        label.textContent = 'paused';
+      } else if (trace?.endedAt && trace?.startedAt) {
+        const total = trace.endedAt - trace.startedAt;
+        label.textContent = `t=${replayCursor.toFixed(0)}/${total}ms`;
+      } else {
+        label.textContent = `t=${replayCursor.toFixed(0)}ms`;
+      }
+    };
+
+    const stopReplay = () => {
+      if (replayInterval) clearInterval(replayInterval);
+      replayInterval = null;
+      $('#btnReplayPlay').textContent = '▶';
+    };
+
+    const startReplay = () => {
+      if (!trace) return;
+      if (replayCursor < 0) replayCursor = 0;
+      const speed = parseFloat($('#replaySpeed').value);
+      $('#btnReplayPlay').textContent = '⏸';
+      replayLastTick = performance.now();
+      // 60ms tick — cheap re-render but smooth perception
+      replayInterval = setInterval(() => {
+        const now = performance.now();
+        const wallElapsed = now - replayLastTick;
+        replayLastTick = now;
+        if (speed >= 999) {
+          replayCursor = (trace.endedAt ?? 0) - (trace.startedAt ?? 0);
+          stopReplay();
+          render();
+          return;
+        }
+        replayCursor += wallElapsed * speed;
+        const total = (trace.endedAt ?? 0) - (trace.startedAt ?? 0);
+        if (total > 0 && replayCursor >= total) {
+          replayCursor = total;
+          stopReplay();
+        }
+        // Auto-select the latest non-future event so the detail pane keeps up.
+        const latest = [...trace.events]
+          .map((e, i) => ({ idx: i, ts: e.ts - trace.startedAt }))
+          .filter((x) => x.ts <= replayCursor)
+          .pop();
+        if (latest) {
+          selectedIdx = composeIdx('a', latest.idx);
+          const e = trace.events[latest.idx];
+          $('#details').innerHTML = `<pre>${escapeHtml(JSON.stringify(e, null, 2))}</pre>`;
+        }
+        render();
+      }, 60);
+    };
+
+    const resetReplay = () => {
+      stopReplay();
+      replayCursor = -1;
+      render();
+    };
+
+    $('#btnReplayPlay').addEventListener('click', () => {
+      if (replayInterval) stopReplay();
+      else startReplay();
+      updateReplayCursorLabel();
+    });
+    $('#btnReplayReset').addEventListener('click', resetReplay);
+    $('#replaySpeed').addEventListener('change', () => {
+      // If currently playing, restart with the new speed
+      if (replayInterval) {
+        stopReplay();
+        startReplay();
+      }
+    });
 
     document.body.addEventListener('click', (ev) => {
       const sessionEl = ev.target.closest('[data-session]');
@@ -482,7 +740,7 @@
       }
       const el = ev.target.closest('[data-idx]');
       if (!el) return;
-      showDetail(parseInt(el.dataset.idx, 10));
+      showDetail(el.dataset.idx);
     });
 
     document.addEventListener('keydown', (ev) => {
@@ -497,17 +755,51 @@
       }
     });
 
+    const validateTrace = (parsed) => {
+      if (!parsed?.events || !Array.isArray(parsed.events)) {
+        throw new Error('Not a harnesskit trace (missing events array)');
+      }
+      return parsed;
+    };
+
     const loadTrace = (text) => {
       try {
-        trace = JSON.parse(text);
-        if (!trace.events || !Array.isArray(trace.events)) {
-          throw new Error('Not a harnesskit trace (missing events array)');
-        }
+        trace = validateTrace(JSON.parse(text));
         selectedIdx = -1;
+        replayCursor = -1;
+        stopReplay();
+        $('#fileBtnB').style.display = '';
         render();
       } catch (err) {
         alert('Failed to parse trace: ' + err.message);
       }
+    };
+
+    const loadTraceB = (text) => {
+      try {
+        traceB = validateTrace(JSON.parse(text));
+        selectedIdx = -1;
+        // Replay disables in compare mode.
+        replayCursor = -1;
+        stopReplay();
+        render();
+      } catch (err) {
+        alert('Failed to parse trace B: ' + err.message);
+      }
+    };
+
+    const closeCompare = () => {
+      traceB = null;
+      // Drop B-side collapse state
+      for (const k of [...collapsedSessions]) {
+        if (k.startsWith('b:')) collapsedSessions.delete(k);
+      }
+      // Drop B-side selection if present
+      if (typeof selectedIdx === 'string' && selectedIdx.startsWith('b:')) {
+        selectedIdx = -1;
+        $('#details').innerHTML = '<p style="color: var(--muted);">Click an event in the timeline to inspect.</p>';
+      }
+      render();
     };
 
     $('#fileInput').addEventListener('change', async (ev) => {
@@ -515,13 +807,19 @@
       if (!file) return;
       loadTrace(await file.text());
     });
+    $('#fileInputB').addEventListener('change', async (ev) => {
+      const file = ev.target.files[0];
+      if (!file) return;
+      loadTraceB(await file.text());
+    });
+    $('#closeCompare').addEventListener('click', closeCompare);
 
     ['filterType', 'filterSource', 'filterText', 'viewMode'].forEach((id) =>
       $('#' + id).addEventListener('input', render),
     );
     $('#viewMode').addEventListener('change', render);
 
-    // Drag-and-drop
+    // Drag-and-drop. Drops trace A; use the "Compare with…" picker for B.
     document.addEventListener('dragover', (e) => e.preventDefault());
     document.addEventListener('drop', async (e) => {
       e.preventDefault();
@@ -563,9 +861,22 @@
 
     $('#loadDemo').addEventListener('click', () => {
       trace = DEMO_TRACE;
+      traceB = null;
       selectedIdx = -1;
+      replayCursor = -1;
+      stopReplay();
+      $('#fileBtnB').style.display = '';
       render();
     });
+
+    // Replay controls become available once a trace is loaded; render() will
+    // hide them again if the user enters compare mode.
+    const showReplayControlsOnLoad = () => {
+      if (trace && !traceB) $('#replayControls').style.display = '';
+    };
+    document.addEventListener('DOMContentLoaded', showReplayControlsOnLoad);
+    // Also after any successful load (loadTrace re-renders, render() decides)
+    showReplayControlsOnLoad();
   </script>
 </body>
 </html>
