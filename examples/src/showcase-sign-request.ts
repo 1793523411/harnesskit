@@ -23,7 +23,10 @@ const main = async (): Promise<void> => {
 
   const target = {
     fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      observedHeaders = Object.fromEntries(new Headers(init?.headers ?? {}).entries());
+      observedHeaders = {};
+      new Headers(init?.headers ?? {}).forEach((v, k) => {
+        observedHeaders[k] = v;
+      });
       return new Response(
         JSON.stringify({
           id: 'msg_signed',

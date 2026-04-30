@@ -15,3 +15,5 @@ coverage
 # Trace dumps from examples/src/demos/05-trace-to-file.ts
 examples/trace.json
 trace.json
+
+.agents/**

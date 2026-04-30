@@ -27,7 +27,10 @@ const main = async (): Promise<void> => {
   let observedBody: { messages: Array<{ role: string; content: unknown }> } | undefined;
   const target = {
     fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      observedHeaders = Object.fromEntries(new Headers(init?.headers ?? {}).entries());
+      observedHeaders = {};
+      new Headers(init?.headers ?? {}).forEach((v, k) => {
+        observedHeaders[k] = v;
+      });
       observedBody = JSON.parse((init?.body as string) ?? '{}');
       // Mocked Bedrock Converse response
       return new Response(
