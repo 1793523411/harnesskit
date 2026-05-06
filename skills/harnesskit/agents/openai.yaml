@@ -1,0 +1,4 @@
+interface:
+  display_name: "HarnessKit"
+  short_description: "Build and operate HarnessKit agent guardrails"
+  default_prompt: "Use $harnesskit to add policies, tracing, evaluation, or provider adapters to an agent project."
