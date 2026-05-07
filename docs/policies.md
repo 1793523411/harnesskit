@@ -1,6 +1,6 @@
 # Policies
 
-A policy decides whether a `tool.call.requested` event should be allowed. `@harnesskit/policy` ships seven builtins, an `allOf`/`anyOf` combinator, and a fluent builder.
+A policy decides whether a `tool.call.requested` event should be allowed. `@harnesskit/policy` ships eleven gating policies (`allowTools`, `denyTools`, `requireApproval`, `tokenBudget`, `maxToolCalls`, `argRegex`, `hostnameAllowlist`, `piiScan`, `costBudget`, `reasoningBudget`, `rateLimit`), two audit-only output interceptors (`outputContentRegex`, `outputPiiScan`), one active wire-rewriter (`redactPiiInToolResults`), an `allOf`/`anyOf` combinator, and a fluent builder.
 
 ## Shape
 
@@ -142,6 +142,28 @@ Audit-only: same as `piiScan` but observes `tool.call.resolved` content (what th
 import { outputPiiScan } from '@harnesskit/policy';
 bus.use(outputPiiScan({ patterns: ['email', 'ssn'] }));
 ```
+
+### `redactPiiInToolResults({ patterns?, replacement?, lookup?, audit? })` (active wire rewriter)
+
+Returns a `(content, ctx) => string | undefined` rewriter function suitable for `installFetchInterceptor({ rewriteToolResults })`. Unlike the audit-only interceptors above, this **modifies the wire payload** before the model sees it — every PII match is swapped for `replacement` (default `'[REDACTED]'`).
+
+```ts
+import { redactPiiInToolResults } from '@harnesskit/policy';
+import { installFetchInterceptor } from '@harnesskit/provider-fetch';
+
+installFetchInterceptor({
+  bus,
+  rewriteToolResults: redactPiiInToolResults({
+    patterns: ['email', 'ssn', /BUG-\d+/],
+    replacement: '[REDACTED]',
+    audit: ({ toolUseId, matches }) => {
+      console.log(`scrubbed ${matches.length} pattern(s) from ${toolUseId}`);
+    },
+  }),
+});
+```
+
+`rewriteToolResults` accepts a single rewriter or an array (chained left-to-right; a throw is caught, emitted as an `error`, and treated as no-op for that block). Implemented across Anthropic, OpenAI Chat, OpenAI Responses, and Gemini wire formats. Pair with `piiScan` (input gating) to cover both directions.
 
 ### `piiScan({ patterns?, tools?, id? })`
 

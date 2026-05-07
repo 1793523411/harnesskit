@@ -14,7 +14,7 @@ Pick the order that fits your goal:
 | [Providers (L1)](./providers.md) | 10 min | What each provider covers, custom hosts, redaction |
 | [Policies](./policies.md) | 15 min | Every builtin, the fluent builder, custom policies |
 | [Evaluation](./eval.md) | 10 min | `TraceRecorder`, scorers, replay, JSON round-trip |
-| [Framework adapters (L2)](./adapters.md) | 15 min | Claude Agent SDK, OpenAI Agents, Vercel AI integration |
+| [Framework adapters (L2)](./adapters.md) | 15 min | Claude Agent SDK, OpenAI Agents, Vercel AI, LangChain.js / LangGraph integration |
 | [Recipes](./recipes.md) | 10 min | Common patterns: audit, approval, budget, multi-tenant |
 | [Runner](./runner.md) | 5 min | `runAgent({...})` — 30-line agent loops with full harness wiring |
 | [OpenTelemetry](./otel.md) | 5 min | Map AgentEvents to OTel spans for production observability |

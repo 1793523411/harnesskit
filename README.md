@@ -104,6 +104,10 @@ pnpm --filter @harnesskit/examples demo:trace-file             # dump trace.json
 pnpm --filter @harnesskit/examples demo:replay                 # what-if: replay against stricter policy
 pnpm --filter @harnesskit/examples demo:approval               # interactive stdin approval gate
 pnpm --filter @harnesskit/examples demo:concurrent             # 10 parallel agents, isolated buses
+pnpm --filter @harnesskit/examples demo:adapter-vercel-ai      # L2 adapter — Vercel AI SDK (generateText) + denyTools
+pnpm --filter @harnesskit/examples demo:adapter-openai-agents  # L2 adapter — @openai/agents Runner
+pnpm --filter @harnesskit/examples demo:adapter-langgraph      # L2 adapter — LangChain.js callback handler
+pnpm --filter @harnesskit/examples demo:adapter-claude-agent-sdk # L2 adapter — Claude Agent SDK hooks (deny propagated to SDK)
 ```
 
 Sample output from `demo:reasoning` against 4 reasoning models:

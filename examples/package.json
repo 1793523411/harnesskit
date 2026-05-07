@@ -25,7 +25,8 @@
     "showcase-diagnostic": "tsx src/showcase-diagnostic.ts",
     "showcase-multi-tenant": "tsx src/showcase-multi-tenant.ts",
     "showcase-runner": "tsx src/showcase-runner.ts",
-    "showcases": "pnpm showcase && pnpm showcase-tokens && pnpm showcase-args && pnpm showcase-hostname && pnpm showcase-pii && pnpm showcase-pii-redact && pnpm showcase-rewriter-chain && pnpm showcase-sign-request && pnpm showcase-vertex-claude && pnpm showcase-bedrock && pnpm showcase-rate-limit && pnpm showcase-diagnostic && pnpm showcase-multi-tenant && pnpm showcase-runner",
+    "showcase-output-policies": "tsx src/showcase-output-policies.ts",
+    "showcases": "pnpm showcase && pnpm showcase-tokens && pnpm showcase-args && pnpm showcase-hostname && pnpm showcase-pii && pnpm showcase-pii-redact && pnpm showcase-rewriter-chain && pnpm showcase-sign-request && pnpm showcase-vertex-claude && pnpm showcase-bedrock && pnpm showcase-rate-limit && pnpm showcase-diagnostic && pnpm showcase-multi-tenant && pnpm showcase-runner && pnpm showcase-output-policies",
     "demo:reasoning": "tsx --env-file=.env src/demos/01-reasoning-showdown.ts",
     "demo:cross-provider-tools": "tsx --env-file=.env src/demos/02-cross-provider-tools.ts",
     "demo:cost": "tsx --env-file=.env src/demos/03-cost-tracking.ts",
@@ -38,6 +39,10 @@
     "demo:long-context": "tsx --env-file=.env src/demos/10-long-context.ts",
     "demo:codex": "tsx --env-file=.env src/demos/11-codex-agent.ts",
     "demo:streaming": "tsx --env-file=.env src/demos/12-streaming-runner.ts",
+    "demo:adapter-vercel-ai": "tsx --env-file=.env src/demos/13-adapter-vercel-ai.ts",
+    "demo:adapter-openai-agents": "tsx --env-file=.env src/demos/14-adapter-openai-agents.ts",
+    "demo:adapter-langgraph": "tsx --env-file=.env src/demos/15-adapter-langgraph.ts",
+    "demo:adapter-claude-agent-sdk": "tsx --env-file=.env src/demos/16-adapter-claude-agent-sdk.ts",
     "all": "pnpm quickstart && pnpm openai-quickstart && pnpm policy-and-eval && pnpm replay-eval",
     "typecheck": "tsc --noEmit",
     "build": "echo 'examples are run with tsx, no build needed'",
@@ -45,14 +50,25 @@
     "clean": "rm -rf .turbo *.tsbuildinfo"
   },
   "dependencies": {
+    "@harnesskit/adapter-claude-agent-sdk": "workspace:*",
+    "@harnesskit/adapter-langgraph": "workspace:*",
+    "@harnesskit/adapter-openai-agents": "workspace:*",
+    "@harnesskit/adapter-vercel-ai": "workspace:*",
     "@harnesskit/core": "workspace:*",
-    "@harnesskit/policy": "workspace:*",
     "@harnesskit/eval": "workspace:*",
+    "@harnesskit/otel": "workspace:*",
+    "@harnesskit/policy": "workspace:*",
     "@harnesskit/provider-fetch": "workspace:*",
-    "@harnesskit/runner": "workspace:*",
-    "@harnesskit/otel": "workspace:*"
+    "@harnesskit/runner": "workspace:*"
   },
   "devDependencies": {
-    "tsx": "^4.19.0"
+    "@ai-sdk/openai": "^3.0.62",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.132",
+    "@langchain/core": "^1.1.45",
+    "@langchain/openai": "^1.4.5",
+    "@openai/agents": "^0.8.5",
+    "ai": "^6.0.168",
+    "tsx": "^4.19.0",
+    "zod": "^4.4.3"
   }
 }

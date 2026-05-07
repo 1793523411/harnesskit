@@ -1,12 +1,13 @@
 # Framework adapters (L2)
 
-Three adapters ship today. Each takes an `EventBus` plus the framework's options object (or its hook emitter) and emits the same `AgentEvent` shape as L1, plus framework-specific enrichment events that L1 can't see.
+Four adapters ship today. Each takes an `EventBus` plus the framework's options object (or its hook emitter / callback handler) and emits the same `AgentEvent` shape as L1, plus framework-specific enrichment events that L1 can't see.
 
 | Adapter | Host package | Enriched events beyond L1 |
 | --- | --- | --- |
 | `@harnesskit/adapter-claude-agent-sdk` | `@anthropic-ai/claude-agent-sdk` | `subagent.spawn`/`return`, `approval.requested`/`resolved`, `context.compacted` |
 | `@harnesskit/adapter-openai-agents` | `@openai/agents` | `subagent.spawn` (handoffs) |
 | `@harnesskit/adapter-vercel-ai` | `ai` (Vercel AI SDK) | `session.start`/`end`, full `tool.call.resolved` with content |
+| `@harnesskit/adapter-langgraph` | `@langchain/core` (LangChain.js / LangGraph) | `tool.call.resolved` with content + `error` events from `handleLLMError` / `handleToolError` |
 
 All adapters are **opt-in**: install the corresponding `@harnesskit/adapter-*` package and the `peerDependency` only matters at the call site.
 
@@ -43,23 +44,21 @@ Unlike L1, this is **pre-flight prevention** — the tool literally never runs.
 
 ## OpenAI Agents SDK
 
-Attach to the runner's `runHooks` (an EventEmitter):
+`Runner` extends `RunHooks` (an EventEmitter), so you pass the runner instance directly as `runHooks`:
 
 ```ts
-import { Agent, run } from '@openai/agents';
+import { Agent, Runner } from '@openai/agents';
 import { EventBus } from '@harnesskit/core';
 import { attachOpenAIAgentsAdapter } from '@harnesskit/adapter-openai-agents';
 
 const bus = new EventBus();
 const agent = new Agent({ /* ... */ });
 
-const result = run(agent, 'do the thing');
-const dispose = attachOpenAIAgentsAdapter({
-  bus,
-  runHooks: result.runHooks,  // EventEmitter on the run
-});
+const runner = new Runner();
+const dispose = attachOpenAIAgentsAdapter({ bus, runHooks: runner });
 
-// ... await result.finalOutput
+const result = await runner.run(agent, 'do the thing');
+console.log(result.finalOutput);
 
 dispose();
 ```
@@ -106,6 +105,46 @@ The first `onStepFinish` call also emits `session.start`. Your existing `onStepF
 
 Unlike L1 (which sees the wire) or Claude Agent SDK adapter (which uses `permissionDecision`), the Vercel adapter's deny path **prevents tool execution** by throwing inside `execute` — the model sees a thrown-error result, not silence.
 
+## LangChain.js / LangGraph
+
+`harnesskitCallbacks({ bus })` returns a duck-typed `BaseCallbackHandler`-shaped object. Pass it via `{ callbacks: [...] }` to any LangChain Runnable (chain, agent, StateGraph node, `ChatModel.invoke`, tool `.invoke`):
+
+```ts
+import { ChatOpenAI } from '@langchain/openai';
+import { tool } from '@langchain/core/tools';
+import { EventBus } from '@harnesskit/core';
+import { harnesskitCallbacks } from '@harnesskit/adapter-langgraph';
+import * as z from 'zod';
+
+const bus = new EventBus();
+const cb = harnesskitCallbacks({ bus });
+
+const getWeather = tool(async ({ city }) => `22°C in ${city}`, {
+  name: 'get_weather',
+  description: 'Look up the weather.',
+  schema: z.object({ city: z.string() }),
+});
+
+const llm = new ChatOpenAI({ model: 'gpt-4o-mini' }).bindTools([getWeather]);
+
+// One callback config covers both LLM turns and tool invocations.
+const reply = await llm.invoke(messages, { callbacks: [cb] });
+for (const tc of reply.tool_calls ?? []) {
+  await getWeather.invoke({ ...tc, type: 'tool_call' as const }, { callbacks: [cb] });
+}
+```
+
+What it captures:
+
+- `handleLLMStart`  → `turn.start`
+- `handleLLMEnd`    → `turn.end` + `usage` (when `output.llmOutput.tokenUsage` is present)
+- `handleLLMError`  → `error` (with `stage: 'turn.end'`)
+- `handleToolStart` → `tool.call.requested` (LangChain v1 passes the tool name as the `runName` arg, not on the tool object — the adapter handles both shapes)
+- `handleToolEnd`   → `tool.call.resolved` with content
+- `handleToolError` → `tool.call.resolved` with `isError: true`
+
+Tool deny via this path is **best-effort** — LangChain executes the tool regardless of what `handleToolStart` returns, so a `bus.deny()` will not stop it. If you need hard prevention, either (a) wrap the tool's `func` yourself and check the bus before running, or (b) layer L1 fetch interception alongside, which catches the underlying provider call and rewrites the next-turn tool result so the model adapts.
+
 ## When to use which
 
 ```
@@ -121,7 +160,7 @@ Hard prevention required (tool MUST NOT run on deny)?
 
 ## Cross-adapter consistency
 
-All three adapters produce the **same** `AgentEvent` shape. A `tool.call.requested` from the Claude adapter is indistinguishable (modulo `source: 'l2'` and any framework-specific `meta`) from one from the Vercel adapter. This means the same policy / scorer / recorder code works regardless of which framework the agent runs on.
+All four adapters produce the **same** `AgentEvent` shape. A `tool.call.requested` from the Claude adapter is indistinguishable (modulo `source: 'l2'` and any framework-specific `meta`) from one from the Vercel adapter. This means the same policy / scorer / recorder code works regardless of which framework the agent runs on.
 
 ## Adapter combinations
 
@@ -136,4 +175,4 @@ If your framework isn't covered:
 3. For deny semantics, check `bus.emit().denied` on `tool.call.requested` and translate to the framework's cancellation API (throw, return false, etc.).
 4. Return a disposer that unsubscribes.
 
-Pattern reference: read [`packages/adapter-openai-agents/src/index.ts`](../packages/adapter-openai-agents/src/index.ts) — it's the simplest of the three.
+Pattern reference: read [`packages/adapter-openai-agents/src/index.ts`](../packages/adapter-openai-agents/src/index.ts) — it's the simplest of the four. For a callback-handler-style adapter (no EventEmitter / no options-wrap), see [`packages/adapter-langgraph/src/index.ts`](../packages/adapter-langgraph/src/index.ts).

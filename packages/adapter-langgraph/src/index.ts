@@ -182,7 +182,7 @@ export const harnesskitCallbacks = (opts: HarnesskitCallbacksOptions): LangChain
       turnByRun.delete(runId);
     },
 
-    async handleToolStart(tool, input, runId, parentRunId) {
+    async handleToolStart(tool, input, runId, parentRunId, _tags, _metadata, runName) {
       const sessionId = resolveSession();
       const t = tool as { name?: string };
       const callId = createCallId();
@@ -190,10 +190,15 @@ export const harnesskitCallbacks = (opts: HarnesskitCallbacksOptions): LangChain
         ? (turnByRun.get(parentRunId)?.turnId ?? createTurnId())
         : createTurnId();
       const parsed = parseInput(input);
+      // LangChain v1 passes tools as a `{lc, type, id}` serialization stub
+      // without `name`. The actual tool name is in `runName`. Earlier
+      // versions / wrappers include `name` directly on the tool object —
+      // we accept either.
+      const toolName = t?.name ?? runName ?? 'tool';
       callByRun.set(runId, {
         callId,
         turnId,
-        name: t?.name ?? 'tool',
+        name: toolName,
         input: parsed,
         startMs: Date.now(),
       });
@@ -203,7 +208,7 @@ export const harnesskitCallbacks = (opts: HarnesskitCallbacksOptions): LangChain
         ts: Date.now(),
         ids,
         source: 'l2',
-        call: { id: callId, name: t?.name ?? 'tool', input: parsed },
+        call: { id: callId, name: toolName, input: parsed },
       });
     },
 
