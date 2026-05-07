@@ -31,7 +31,7 @@ Three integration layers, all optional, all emit the same `AgentEvent` shape so 
 
 | Layer | What it is | Best for |
 | --- | --- | --- |
-| **L1** | `globalThis.fetch` patch — auto-detects Anthropic Messages, OpenAI Chat, OpenAI Responses, OpenRouter | Any agent built on standard SDKs — no framework lock-in |
+| **L1** | `globalThis.fetch` patch — auto-detects Anthropic Messages (incl. Vertex `:rawPredict`), OpenAI Chat, OpenAI Responses, OpenRouter, Gemini, AWS Bedrock Converse | Any agent built on standard SDKs — no framework lock-in |
 | **L2** | Per-framework adapter (Claude Agent SDK, OpenAI Agents SDK, Vercel AI SDK) | Richer semantics — subagents, approvals, session lifecycle |
 | **L1 + L2** | Both at once | Wire-level visibility plus framework-level metadata, dedupe via `turnId` |
 
@@ -40,10 +40,10 @@ Three integration layers, all optional, all emit the same `AgentEvent` shape so 
 | Package | Purpose |
 | --- | --- |
 | [`@harnesskit/core`](./packages/core) | Event bus, `AgentEvent` types, `Interceptor`/`Policy` interfaces |
-| [`@harnesskit/policy`](./packages/policy) | 11 builtin policies (allowTools/denyTools/requireApproval/tokenBudget/maxToolCalls/argRegex/hostnameAllowlist/piiScan/costBudget/reasoningBudget + outputContentRegex/outputPiiScan audit interceptors), `allOf`/`anyOf` combinators, fluent builder |
+| [`@harnesskit/policy`](./packages/policy) | 13 builtin policies (allowTools/denyTools/requireApproval/tokenBudget/maxToolCalls/argRegex/hostnameAllowlist/piiScan/costBudget/reasoningBudget/**rateLimit** + outputContentRegex/outputPiiScan audit interceptors + **redactPiiInToolResults** active wire rewriter), `allOf`/`anyOf` combinators, fluent builder |
 | [`@harnesskit/eval`](./packages/eval) | `TraceRecorder`, 6 builtin scorers, JSON serialization, replay |
-| [`@harnesskit/provider-fetch`](./packages/provider-fetch) | L1 fetch interceptor — Anthropic, OpenAI Chat, OpenAI Responses, OpenRouter, **Gemini** |
-| [`@harnesskit/runner`](./packages/runner) | `runAgent({...})` — minimal OpenAI-Compat agent loop with policies + tracing wired |
+| [`@harnesskit/provider-fetch`](./packages/provider-fetch) | L1 fetch interceptor — Anthropic (incl. **Vertex Claude `:rawPredict`**), OpenAI Chat, OpenAI Responses, OpenRouter, Gemini, **AWS Bedrock Converse** (with `signRequest` hook for Sig V4). Plus `createDiagnostic({bus})` for "why is the bus silent?" setup checks. |
+| [`@harnesskit/runner`](./packages/runner) | `runAgent({...})` (buffered) and `runAgentStream({...})` (token-stream `AsyncGenerator`) — minimal OpenAI-Compat agent loops with policies + tracing wired |
 | [`@harnesskit/otel`](./packages/otel) | OpenTelemetry exporter mapping AgentEvents → spans |
 | [`@harnesskit/adapter-claude-agent-sdk`](./packages/adapter-claude-agent-sdk) | L2 adapter for `@anthropic-ai/claude-agent-sdk` |
 | [`@harnesskit/adapter-openai-agents`](./packages/adapter-openai-agents) | L2 adapter for `@openai/agents` |
@@ -145,7 +145,7 @@ Each showcase is a self-contained `.ts` file you can read, modify, and re-run. S
 
 ## Status
 
-`v0.0.0` — internal API stable, public release pending. 70+ unit tests, lint clean, four mock examples plus a real-API integration suite covering Volcengine / DeepSeek / Doubao / MiniMax / OpenAI gpt-5 series, including reasoning-model `reasoning_content` normalization, 4-provider customHosts, multi-turn tool chains, and concurrent sessions. OpenAI-compatible providers (Volcengine, Groq, Together, any LiteLLM proxy) work via `customHosts.openai`.
+`v0.0.0` — internal API stable, public release pending. ~150 unit tests across all packages (146 today), lint clean, ~14 mock-only showcases plus a real-API integration suite covering Volcengine / DeepSeek / Doubao / MiniMax / OpenAI gpt-5 series and AWS Bedrock Converse (with `signRequest` for Sig V4). Includes reasoning-model `reasoning_content` normalization, mid-stream cancel for Anthropic / Gemini / OpenAI Responses / Bedrock, multi-turn tool chains, concurrent sessions, and active wire-level PII redaction. OpenAI-compatible providers (Volcengine, Groq, Together, any LiteLLM proxy) work via `customHosts.openai`.
 
 ## License
 
