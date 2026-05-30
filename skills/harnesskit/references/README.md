@@ -6,10 +6,12 @@ Pick the order that fits your goal:
 - **Want the mental model first** → [Concepts](./concepts.md)
 - **Already know what you want, looking for reference** → [Policies](./policies.md), [Eval](./eval.md), [Providers](./providers.md), [Adapters](./adapters.md)
 - **Looking for a pattern** → [Recipes](./recipes.md)
+- **Want the easiest SDK entry point** → [SDK facade](./sdk.md)
 
 | Guide | Reads in | What you'll learn |
 | --- | --- | --- |
 | [Getting started](./getting-started.md) | 5 min | Install + a working interceptor + your first policy |
+| [SDK facade](./sdk.md) | 5 min | `createHarness()`, default tracing, fetch install, and pre-flight tool wrapping |
 | [Concepts](./concepts.md) | 10 min | The event bus, `AgentEvent` shape, L1 vs L2, deny flow |
 | [Providers (L1)](./providers.md) | 10 min | What each provider covers, custom hosts, redaction |
 | [Policies](./policies.md) | 15 min | Every builtin, the fluent builder, custom policies |

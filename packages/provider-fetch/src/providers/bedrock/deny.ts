@@ -1,15 +1,12 @@
 import type { ToolResultRewriter } from '../types.js';
-import type { BedrockContentBlock, BedrockMessage, BedrockRequest } from './types.js';
+import type {
+  BedrockContentBlock,
+  BedrockMessage,
+  BedrockRequest,
+  BedrockToolResultBlock,
+} from './types.js';
 
-const isToolResult = (
-  b: BedrockContentBlock,
-): b is {
-  toolResult: {
-    toolUseId: string;
-    content: Array<{ text?: string; json?: unknown }>;
-    status?: 'success' | 'error';
-  };
-} =>
+const isToolResult = (b: BedrockContentBlock): b is BedrockToolResultBlock =>
   typeof (b as { toolResult?: unknown }).toolResult === 'object' &&
   (b as { toolResult?: unknown }).toolResult !== null;
 
@@ -44,12 +41,8 @@ export const applyDenyRewrites = (
   return touched ? { rewritten: { ...req, messages }, rewroteIds } : { rewritten: req, rewroteIds };
 };
 
-const stringifyContent = (
-  parts: Array<{ text?: string; json?: unknown }>,
-): string =>
-  parts
-    .map((p) => (typeof p.text === 'string' ? p.text : JSON.stringify(p.json ?? '')))
-    .join('\n');
+const stringifyContent = (parts: BedrockToolResultBlock['toolResult']['content']): string =>
+  parts.map((p) => ('text' in p ? p.text : JSON.stringify(p.json))).join('\n');
 
 export const applyContentRewrites = (
   req: BedrockRequest,

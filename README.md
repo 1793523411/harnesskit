@@ -39,6 +39,7 @@ Three integration layers, all optional, all emit the same `AgentEvent` shape so 
 
 | Package | Purpose |
 | --- | --- |
+| [`@harnesskit/sdk`](./packages/sdk) | High-level facade: `createHarness()`, default trace recording, fetch install, policy wiring, and pre-flight `wrapTools()` |
 | [`@harnesskit/core`](./packages/core) | Event bus, `AgentEvent` types, `Interceptor`/`Policy` interfaces |
 | [`@harnesskit/policy`](./packages/policy) | 13 builtin policies (allowTools/denyTools/requireApproval/tokenBudget/maxToolCalls/argRegex/hostnameAllowlist/piiScan/costBudget/reasoningBudget/**rateLimit** + outputContentRegex/outputPiiScan audit interceptors + **redactPiiInToolResults** active wire rewriter), `allOf`/`anyOf` combinators, fluent builder |
 | [`@harnesskit/eval`](./packages/eval) | `TraceRecorder`, 6 builtin scorers, JSON serialization, replay |
@@ -54,6 +55,8 @@ Three integration layers, all optional, all emit the same `AgentEvent` shape so 
 ## Install
 
 ```bash
+pnpm add @harnesskit/sdk @harnesskit/policy
+# or compose only the lower-level packages you need:
 pnpm add @harnesskit/core @harnesskit/policy @harnesskit/provider-fetch
 # Add `@harnesskit/eval` if you want trace recording.
 # Add the matching `@harnesskit/adapter-*` if you want L2 semantics.
@@ -63,6 +66,7 @@ Requires Node 20+, ESM-only.
 
 ## Documentation
 
+- [SDK facade](./docs/sdk.md) — `createHarness()`, `wrapTools()`, default trace recording
 - [Getting started](./docs/getting-started.md) — install, first event, first policy
 - [Concepts](./docs/concepts.md) — architecture, `AgentEvent`, `EventBus`, deny semantics
 - [Providers (L1)](./docs/providers.md) — provider matrix, custom hosts, header redaction
@@ -80,6 +84,7 @@ pnpm --filter @harnesskit/examples quickstart          # Anthropic + denyTools
 pnpm --filter @harnesskit/examples openai-quickstart   # same code, OpenAI Chat Completions
 pnpm --filter @harnesskit/examples policy-and-eval     # full policy + scorer pipeline
 pnpm --filter @harnesskit/examples replay-eval         # capture trace, replay through stricter policy
+pnpm --filter @harnesskit/examples showcase-sdk        # real-model facade + pre-flight tool gating
 ```
 
 All four mock examples run without API keys. There are also real-API integration suites gated on env vars:

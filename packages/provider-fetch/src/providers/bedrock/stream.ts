@@ -57,15 +57,18 @@ const handleEvent = (
     case 'contentBlockStart': {
       const idx = payload.contentBlockIndex as number | undefined;
       if (typeof idx !== 'number') return {};
-      const start = payload.start as { toolUse?: { toolUseId?: string; name?: string } } | undefined;
+      const start = payload.start as
+        | { toolUse?: { toolUseId?: string; name?: string } }
+        | undefined;
       if (start?.toolUse) {
-        accum.blocks.set(idx, {
+        const block: BlockAccum = {
           type: 'toolUse',
           text: [],
-          toolUseId: start.toolUse.toolUseId,
-          toolName: start.toolUse.name,
           toolInputParts: [],
-        });
+        };
+        if (start.toolUse.toolUseId !== undefined) block.toolUseId = start.toolUse.toolUseId;
+        if (start.toolUse.name !== undefined) block.toolName = start.toolUse.name;
+        accum.blocks.set(idx, block);
       } else {
         // Bedrock doesn't always send contentBlockStart for text blocks —
         // delta is the first signal. Pre-create an empty text block here only

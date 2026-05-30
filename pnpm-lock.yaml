@@ -62,6 +62,9 @@ importers:
       '@harnesskit/runner':
         specifier: workspace:*
         version: link:../packages/runner
+      '@harnesskit/sdk':
+        specifier: workspace:*
+        version: link:../packages/sdk
     devDependencies:
       '@ai-sdk/openai':
         specifier: ^3.0.62
@@ -156,6 +159,21 @@ importers:
         version: link:../core
 
   packages/runner:
+    dependencies:
+      '@harnesskit/core':
+        specifier: workspace:*
+        version: link:../core
+      '@harnesskit/eval':
+        specifier: workspace:*
+        version: link:../eval
+      '@harnesskit/policy':
+        specifier: workspace:*
+        version: link:../policy
+      '@harnesskit/provider-fetch':
+        specifier: workspace:*
+        version: link:../provider-fetch
+
+  packages/sdk:
     dependencies:
       '@harnesskit/core':
         specifier: workspace:*

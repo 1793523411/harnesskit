@@ -1,6 +1,6 @@
 ---
 name: harnesskit
-description: Build with HarnessKit, an embeddable TypeScript harness for LLM agents that unifies runtime guardrails, policy enforcement, tracing, evaluation, replay, provider interception, framework adapters, runner loops, and OpenTelemetry. Use when Codex needs to install or integrate @harnesskit packages, add tool-deny or approval policies, redact PII, cap token/cost/reasoning budgets, record and score traces, replay evals, wire L1 provider-fetch interception for OpenAI/Anthropic/Gemini/OpenRouter/custom OpenAI-compatible hosts, use L2 adapters for Claude Agent SDK/OpenAI Agents/Vercel AI/LangGraph, debug AgentEvent streams, or run HarnessKit examples and demos.
+description: Build with HarnessKit, an embeddable TypeScript harness for LLM agents that unifies runtime guardrails, policy enforcement, tracing, evaluation, replay, provider interception, framework adapters, runner loops, SDK facade setup, and OpenTelemetry. Use when Codex needs to install or integrate @harnesskit packages, create a high-level harness with createHarness()/wrapTools(), add tool-deny or approval policies, redact PII, cap token/cost/reasoning budgets, record and score traces, replay evals, wire L1 provider-fetch interception for OpenAI/Anthropic/Gemini/OpenRouter/custom OpenAI-compatible hosts, use L2 adapters for Claude Agent SDK/OpenAI Agents/Vercel AI/LangGraph, debug AgentEvent streams, or run HarnessKit examples and demos.
 ---
 
 # HarnessKit
@@ -16,6 +16,7 @@ HarnessKit is TypeScript, ESM-only, Node 20+, and centers on one `EventBus` that
 Read only what the task needs:
 
 - `references/project-overview.md`: package map, install snippets, examples, status, and end-to-end demos.
+- `references/sdk.md`: high-level `createHarness()`, default tracing, fetch install, and pre-flight `wrapTools()`.
 - `references/getting-started.md`: first install, first event, first policy, and minimal setup.
 - `references/concepts.md`: `EventBus`, `AgentEvent`, content blocks, gateable events, L1 vs L2, and deny flow.
 - `references/providers.md`: L1 `installFetchInterceptor`, provider matrix, OpenAI-compatible custom hosts, redaction, and limitations.
@@ -56,6 +57,30 @@ installFetchInterceptor({ bus });
 ```
 
 Remember: L1 denial is post-flight and rewrites the next tool result into an error. For hard pre-execution prevention, prefer an L2 adapter or sandbox.
+
+### Use the High-Level SDK Facade
+
+Load `sdk.md`, `policies.md`, and optionally `runner.md`.
+
+Typical shape:
+
+```ts
+import { denyTools } from '@harnesskit/policy';
+import { createHarness } from '@harnesskit/sdk';
+
+const harness = createHarness({
+  policies: [denyTools(['shell'])],
+  fetch: true,
+});
+
+const tools = harness.wrapTools({
+  shell: {
+    execute: async (args) => runShell(String(args.cmd)),
+  },
+});
+```
+
+Use this when the user wants low-boilerplate setup, default trace capture, or host-side pre-flight tool gating.
 
 ### Design Policies
 
